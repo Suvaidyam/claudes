@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
+import { poolConfigDir } from "./account.js";
 import { resolveConfigPath } from "./home.js";
 import { loadConfig, MAX_REVIEWERS, type Config } from "./config.js";
 import { emptyPlan, initialMaxRounds, prepareContinue, resumeMaxRounds, type ContinuePlan } from "./continue.js";
@@ -75,6 +76,8 @@ function readArg(v: string | undefined): string | undefined {
 }
 
 async function main(): Promise<number> {
+  const poolDir = poolConfigDir();
+  if (poolDir) process.env.CLAUDE_CONFIG_DIR = poolDir;
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
