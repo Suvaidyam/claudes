@@ -9,6 +9,7 @@ PROFILES = BASE / "profiles"
 ACCOUNTS = BASE / "accounts.json"
 CURRENT = BASE / "current_profile"
 SHARED = BASE / "shared"
+BIN_DIR = Path(os.environ.get("CLAUDES_BIN_DIR", "/usr/local/bin"))
 
 GREEN="\033[92m"; YELLOW="\033[93m"; RED="\033[91m"; GRAY="\033[90m"; RESET="\033[0m"
 
@@ -207,12 +208,171 @@ def _sync_last_session(name):
     if changed:
         cj.write_text(json.dumps(data, indent=2))
 
+IDEATE_PLUGIN = "ideate@claude-pool"
+
+def _copy_marketplace(src_root, market):
+    """Replace `market` with a fresh copy of the marketplace file and plugins/,
+    built beside it first so a failed copy leaves the old one in place."""
+    staging = market.with_name(market.name + ".new")
+    if staging.exists():
+        shutil.rmtree(staging)
+    (staging / ".claude-plugin").mkdir(parents=True)
+    shutil.copy2(src_root / ".claude-plugin" / "marketplace.json", staging / ".claude-plugin" / "marketplace.json")
+    shutil.copytree(src_root / "plugins", staging / "plugins")
+    if market.exists() or market.is_symlink():
+        if market.is_dir() and not market.is_symlink():
+            shutil.rmtree(market)
+        else:
+            market.unlink()
+    staging.rename(market)
+
+def _node_version():
+    """(major, text) for the `node` on PATH; (None, "none") when there is none."""
+    node = shutil.which("node")
+    if not node:
+        return None, "none"
+    try:
+        r = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        text = r.stdout.strip() or "unknown"
+    except Exception:
+        return None, "unknown"
+    m = re.match(r"v?(\d+)\.", text)
+    return (int(m.group(1)) if m else None), text
+
+def _sh_quote(s):
+    """Escape a string for use inside double quotes in sh."""
+    return re.sub(r'([\\"$`])', r"\\\1", s)
+
+def _write_ideate_wrapper(market):
+    base = _sh_quote(str(BASE.resolve()))
+    wrapper = market / "ideate"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f'export CLAUDES_BASE="${{CLAUDES_BASE:-{base}}}"\n'
+        f'exec node "{base}/marketplace/plugins/ideate/bin/ideate.mjs" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    return wrapper
+
+def _link_ideate(wrapper):
+    """Point BIN_DIR/ideate at the wrapper. Replaces a symlink, never a real
+    file. True when the link is in place; setup.sh handles the fallback."""
+    link = BIN_DIR / "ideate"
+    try:
+        if link.is_symlink():
+            link.unlink()
+        elif link.exists():
+            return False
+        link.symlink_to(wrapper)
+        return True
+    except OSError:
+        return False
+
+def _link_into(folder, name, target):
+    item = folder / name
+    if item.is_symlink() and item.resolve() == target.resolve():
+        return
+    if item.is_dir() and not item.is_symlink():
+        shutil.rmtree(item)
+    elif item.exists() or item.is_symlink():
+        item.unlink()
+    item.symlink_to(target)
+
+def _ideate_plugin_installed():
+    """True when the shared plugins list ideate@claude-pool at user scope."""
+    try:
+        data = json.loads((SHARED / "plugins" / "installed_plugins.json").read_text())
+        entries = data.get("plugins", {}).get(IDEATE_PLUGIN) or []
+        return any(e.get("scope") == "user" for e in entries)
+    except Exception:
+        return False
+
+def _install_ideate_plugin(claude, market):
+    """Install ideate@claude-pool into the shared plugins and settings, via a
+    config folder that holds only links to them. Returns an error line or None."""
+    host = SHARED / ".plugin-host"
+    host.mkdir(exist_ok=True)
+    _link_into(host, "plugins", SHARED / "plugins")
+    _link_into(host, "settings.json", SHARED / "settings.json")
+    env = os.environ.copy()
+    env["CLAUDE_CONFIG_DIR"] = str(host)
+    commands = [["plugin", "marketplace", "add", str(market)]]
+    # Uninstall before install when already installed: the plugin version only
+    # changes with package.json, and `claude plugin install` (alone, or after
+    # `claude plugin marketplace update claude-pool`) keeps the cached copy of
+    # an installed version, so a changed skill would never reach the profiles.
+    if _ideate_plugin_installed():
+        commands.append(["plugin", "uninstall", "--keep-data", IDEATE_PLUGIN])
+    commands.append(["plugin", "install", IDEATE_PLUGIN])
+    for args in commands:
+        try:
+            r = subprocess.run([claude] + args, env=env, capture_output=True, text=True,
+                               timeout=120, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return f"'claude {' '.join(args)}' timed out"
+        if r.returncode != 0:
+            lines = [l.strip() for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()]
+            return lines[-1] if lines else f"'claude {' '.join(args)}' exited {r.returncode}"
+    return None
+
+def install_ideate(src_root):
+    """Set up the ideate command and the /ideate:review plugin. Prints one
+    line per step it can't do; never raises."""
+    src_root = Path(src_root).resolve()
+    market = BASE / "marketplace"
+    if (src_root / "plugins" / "ideate").is_dir() and src_root != BASE.resolve():
+        _copy_marketplace(src_root, market)
+    if not (market / "plugins" / "ideate").is_dir():
+        print("ideate: not bundled with this copy; run setup.sh from the claude_pool clone")
+        return
+
+    major, version = _node_version()
+    if major is None or major < 20:
+        print(f"ideate: needs Node 20 or newer (found {version}); skipped")
+        return
+
+    command_linked = _link_ideate(_write_ideate_wrapper(market))
+
+    plugin_installed = False
+    claude = shutil.which("claude")
+    if claude is None:
+        print("ideate: 'claude' CLI not found; the /ideate:review command was not installed")
+    else:
+        error = _install_ideate_plugin(claude, market)
+        if error:
+            print(f"ideate: plugin install failed ({error})")
+        else:
+            plugin_installed = True
+
+    if command_linked:
+        print("ideate: command installed")
+    else:
+        print(f"ideate: command not linked into {BIN_DIR}; setup.sh links it from ~/bin")
+    if plugin_installed:
+        print("ideate: /ideate:review installed for linked profiles")
+    else:
+        print("ideate: /ideate:review not installed")
+    for name in ["agy", "codex"]:
+        if shutil.which(name):
+            print(f"ideate: {name} found")
+        else:
+            print(f"ideate: {name} not found (reviews need it installed and logged in)")
+    shared_plugins = (SHARED / "plugins").resolve()
+    for a in load()["accounts"]:
+        try:
+            plugins = Path(config_dir(a)) / "plugins"
+        except KeyError:
+            continue
+        if not (plugins.is_symlink() and plugins.resolve() == shared_plugins):
+            print(f"ideate: profile '{a['name']}' is not linked to the shared layer; run 'claudes migrate' for it to see the plugin")
+
 def install():
     ensure()
     target = BASE / "claudes"
-    shutil.copy2(Path(__file__), target)
+    if Path(__file__).resolve() != target.resolve():
+        shutil.copy2(Path(__file__), target)
     target.chmod(target.stat().st_mode | stat.S_IEXEC)
-    link = Path("/usr/local/bin/claudes")
+    link = BIN_DIR / "claudes"
     try:
         if link.exists() or link.is_symlink():
             link.unlink()
@@ -220,6 +380,10 @@ def install():
         print(f"Installed: {link}")
     except Exception:
         print("Add ~/.claudes to PATH manually")
+    try:
+        install_ideate(Path(__file__).resolve().parent)
+    except Exception as e:
+        print(f"ideate: skipped ({e or type(e).__name__})")
     print("Done")
 
 def add(name):

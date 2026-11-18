@@ -28,6 +28,46 @@ python3 "$SCRIPT_DIR/claudes.py" install
 
 NEEDS_RELAUNCH=0
 RC_FILE=""
+PATH_LINE="export PATH=\"\$HOME/bin:\$HOME/.claudes:\$PATH\""
+
+choose_rc_file() {
+    case "${SHELL:-}" in
+        */zsh) RC_FILE="$HOME/.zshrc" ;;
+        */bash) RC_FILE="$HOME/.bash_profile" ;;
+        *) RC_FILE="$HOME/.profile" ;;
+    esac
+}
+
+add_path_line() {
+    choose_rc_file
+    if [ ! -f "$RC_FILE" ] || ! grep -qF "$PATH_LINE" "$RC_FILE"; then
+        {
+            echo ""
+            echo "$PATH_LINE"
+        } >> "$RC_FILE"
+        echo "Added PATH entry to $RC_FILE"
+    fi
+    NEEDS_RELAUNCH=1
+}
+
+# The ideate command, when claudes.py install set it up and it isn't on PATH yet.
+link_ideate() {
+    local wrapper="$BASE_DIR/marketplace/ideate"
+    [ -f "$wrapper" ] || return 0
+    local found
+    found="$(command -v ideate 2>/dev/null || true)"
+    if [ -n "$found" ] && [ "$found" -ef "$wrapper" ]; then
+        return 0
+    fi
+    echo
+    if [ -n "$found" ]; then
+        echo "Note: a different 'ideate' is earlier on PATH: $found"
+    fi
+    mkdir -p "$HOME/bin"
+    ln -sf "$wrapper" "$HOME/bin/ideate"
+    echo "Linked: $HOME/bin/ideate -> $wrapper"
+    add_path_line
+}
 
 if command -v claudes >/dev/null 2>&1; then
     echo
@@ -41,23 +81,10 @@ else
     ln -sf "$BASE_DIR/claudes" "$HOME/bin/claudes"
     echo "Linked: $HOME/bin/claudes -> $BASE_DIR/claudes"
 
-    case "${SHELL:-}" in
-        */zsh) RC_FILE="$HOME/.zshrc" ;;
-        */bash) RC_FILE="$HOME/.bash_profile" ;;
-        *) RC_FILE="$HOME/.profile" ;;
-    esac
-
-    PATH_LINE="export PATH=\"\$HOME/bin:\$HOME/.claudes:\$PATH\""
-    if [ ! -f "$RC_FILE" ] || ! grep -qF "$PATH_LINE" "$RC_FILE"; then
-        {
-            echo ""
-            echo "$PATH_LINE"
-        } >> "$RC_FILE"
-        echo "Added PATH entry to $RC_FILE"
-    fi
-
-    NEEDS_RELAUNCH=1
+    add_path_line
 fi
+
+link_ideate
 
 echo
 echo "Base directory : $BASE_DIR"
