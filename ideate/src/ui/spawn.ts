@@ -4,14 +4,17 @@
  */
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * How to launch the CLI from this module: compiled, `node dist/cli.js`; from src/ under tsx,
- * `node --import tsx src/cli.ts`. Resolved from this file, never from process.argv[1].
+ * How to launch the CLI from this module: bundled, `node bin/ideate.mjs` (this very file);
+ * compiled, `node dist/cli.js`; from src/ under tsx, `node --import tsx src/cli.ts`.
+ * Resolved from this file, never from process.argv[1].
  */
 export function defaultCliCommand(moduleUrl = import.meta.url): string[] {
+  const file = fileURLToPath(moduleUrl);
+  if (basename(file) === "ideate.mjs") return [process.execPath, file];
   const root = fileURLToPath(new URL("../../", moduleUrl)); // dist/ui/ or src/ui/ → repo root
   return moduleUrl.endsWith(".ts")
     ? [process.execPath, "--import", "tsx", join(root, "src", "cli.ts")]

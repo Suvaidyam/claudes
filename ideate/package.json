@@ -12,7 +12,9 @@
     "dev:ui": "vite --config ui/vite.config.ts",
     "ideate": "tsx src/cli.ts",
     "demo": "tsx src/cli.ts run --config config.mock.json --brief \"Offline-first CHW visit sync for 50k devices\"",
-    "test": "node --import tsx --test test/*.test.ts ui/src/lib/*.test.ts"
+    "bundle": "node scripts/bundle.mjs",
+    "bundle:check": "node scripts/bundle.mjs --check",
+    "test": "node --import tsx --test test/*.test.ts ui/src/lib/*.test.ts && npm run bundle:check"
   },
   "engines": {
     "node": ">=20"
@@ -30,6 +32,7 @@
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "4.3.4",
+    "esbuild": "0.28.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vite": "5.4.11"

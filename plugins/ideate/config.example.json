@@ -1,0 +1,37 @@
+{
+  "primary": "claude",
+  "secondaries": ["agy", "codex"],
+  "loop": {
+    "maxRounds": 3,
+    "passScore": 8,
+    "maxBlockers": 0,
+    "stagnationRounds": 2,
+    "minDelta": 0.25,
+    "timeoutSec": 600,
+    "repairAttempts": 1
+  },
+  "providers": {
+    "claude": {
+      "type": "command",
+      "cmd": "claude",
+      "args": ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--tools", "", "--strict-mcp-config"],
+      "stream": "claude-stream-json",
+      "input": "stdin"
+    },
+    "agy": {
+      "type": "command",
+      "cmd": "agy",
+      "args": ["--input-format", "stream-json", "--output-format", "stream-json", "--sandbox", "--disable-slash-commands", "-p", ""],
+      "stream": "agy-stream-json",
+      "input": "stream-json"
+    },
+    "codex": {
+      "type": "command",
+      "cmd": "codex",
+      "args": ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral", "--json", "-"],
+      "stream": "codex-json",
+      "input": "stdin"
+    }
+  },
+  "runsDir": "runs"
+}

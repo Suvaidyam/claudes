@@ -36,8 +36,14 @@ const PING_MS = 15_000;
 const MAX_BODY = 10 * 1024 * 1024;
 /** Texts longer than this, or starting with "@" (the CLI's file marker), go to the worker via a file. */
 const MAX_ARG = 8000;
-/** Vite builds the front end here (dist/ui holds the compiled server modules). */
-const UI_DIR = fileURLToPath(new URL("../../dist/web/", import.meta.url));
+/**
+ * The built front end, the first that exists relative to this module: "../web/" is the bundle's
+ * web/ beside bin/ and also dist/web from dist/ui (compiled); "../../dist/web/" is dist/web from
+ * src/ui (source). If none is built, the source path is kept and serveStatic says how to build it.
+ */
+const UI_DIR = ["../web/", "./web/", "../../dist/web/"]
+  .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
+  .find((dir) => existsSync(dir)) ?? fileURLToPath(new URL("../../dist/web/", import.meta.url));
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 class HttpError extends Error {
