@@ -71,7 +71,9 @@ export function loadConfig(path: string): Config {
     if (e instanceof SyntaxError) throw new Error(`Config ${path} is not valid JSON: ${e.message}`);
     throw e;
   }
-  const cfg = Config.parse(raw);
+  const parsed = Config.safeParse(raw);
+  if (!parsed.success) throw new Error(`Config ${path} is invalid: ${parsed.error.message}`);
+  const cfg = parsed.data;
   if (!isAbsolute(cfg.runsDir)) cfg.runsDir = resolve(dirname(resolve(path)), cfg.runsDir);
   for (const name of [cfg.primary, ...cfg.secondaries]) {
     if (!cfg.providers[name]) throw new Error(`Provider "${name}" not defined in config.providers`);

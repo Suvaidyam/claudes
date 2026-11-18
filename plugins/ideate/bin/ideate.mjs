@@ -13277,7 +13277,7 @@ import { createInterface as createInterface2 } from "node:readline/promises";
 import { parseArgs } from "node:util";
 
 // src/account.ts
-import { readFileSync } from "node:fs";
+import { existsSync as existsSync2, readFileSync } from "node:fs";
 import { join as join2 } from "node:path";
 
 // src/home.ts
@@ -13320,7 +13320,7 @@ function poolConfigDir(env = process.env) {
     const data = JSON.parse(readFileSync(join2(base, "accounts.json"), "utf8"));
     const account = data.accounts?.find((a) => a?.name === name);
     const dir = account?.config_path || account?.path;
-    return typeof dir === "string" && dir ? dir : void 0;
+    return typeof dir === "string" && dir && existsSync2(dir) ? dir : void 0;
   } catch {
     return void 0;
   }
@@ -17431,7 +17431,9 @@ function loadConfig(path3) {
     if (e instanceof SyntaxError) throw new Error(`Config ${path3} is not valid JSON: ${e.message}`);
     throw e;
   }
-  const cfg = Config.parse(raw);
+  const parsed = Config.safeParse(raw);
+  if (!parsed.success) throw new Error(`Config ${path3} is invalid: ${parsed.error.message}`);
+  const cfg = parsed.data;
   if (!isAbsolute(cfg.runsDir)) cfg.runsDir = resolve2(dirname2(resolve2(path3)), cfg.runsDir);
   for (const name of [cfg.primary, ...cfg.secondaries]) {
     if (!cfg.providers[name]) throw new Error(`Provider "${name}" not defined in config.providers`);
@@ -17445,12 +17447,12 @@ function loadConfig(path3) {
 }
 
 // src/ideas.ts
-import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync4, readdirSync, readFileSync as readFileSync4 } from "node:fs";
 import { join as join4 } from "node:path";
 
 // src/worker.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync2, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join as join3 } from "node:path";
 var HEARTBEAT_MS = 5e3;
 var workerPath = (runDir) => join3(runDir, "worker.json");
@@ -17517,7 +17519,7 @@ function sameProcess(pid, startedAt, command = []) {
   return !!line && line.includes(command.join(" "));
 }
 function liveness(runDir) {
-  if (!existsSync2(workerPath(runDir))) return { active: false };
+  if (!existsSync3(workerPath(runDir))) return { active: false };
   const w = readWorker(runDir);
   if (!w || !pidAlive(w.pid)) return { active: false };
   const age = Date.now() - Date.parse(w.heartbeatAt);
@@ -17556,7 +17558,7 @@ function summarize(state, depth = 0, num = 0, runDir) {
   };
 }
 function listRuns(runsDir) {
-  if (!existsSync3(runsDir)) return [];
+  if (!existsSync4(runsDir)) return [];
   const states = [];
   const dirOf = /* @__PURE__ */ new Map();
   for (const entry of readdirSync(runsDir, { withFileTypes: true })) {
@@ -17695,9 +17697,9 @@ import { appendFileSync } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/jsonl.ts
-import { closeSync, existsSync as existsSync4, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, existsSync as existsSync5, fstatSync, openSync, readSync } from "node:fs";
 function endsMidLine(path3) {
-  if (!existsSync4(path3)) return false;
+  if (!existsSync5(path3)) return false;
   const fd = openSync(path3, "r");
   try {
     const size = fstatSync(fd).size;
@@ -17710,7 +17712,7 @@ function endsMidLine(path3) {
   }
 }
 function readJsonl(path3, fromOffset) {
-  if (!existsSync4(path3)) return { values: [], ends: [], offset: fromOffset };
+  if (!existsSync5(path3)) return { values: [], ends: [], offset: fromOffset };
   const fd = openSync(path3, "r");
   let buf;
   try {
@@ -17806,7 +17808,7 @@ var oneLine = (t, n = 100) => {
 
 // src/store.ts
 import { randomBytes } from "node:crypto";
-import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync as appendFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6 } from "node:path";
 var RunStore = class _RunStore {
   constructor(runsDir, id) {
@@ -17825,11 +17827,11 @@ var RunStore = class _RunStore {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(id)) {
       throw new Error(`Run id "${id}" must be letters, digits, ".", "_" or "-" (starting with a letter or digit)`);
     }
-    if (existsSync5(join6(runsDir, id, "state.json"))) throw new Error(`Run ${id} already exists`);
+    if (existsSync6(join6(runsDir, id, "state.json"))) throw new Error(`Run ${id} already exists`);
   }
   static load(runsDir, id) {
     const path3 = join6(runsDir, id, "state.json");
-    if (!existsSync5(path3)) throw new Error(`No run state at ${path3}`);
+    if (!existsSync6(path3)) throw new Error(`No run state at ${path3}`);
     return { store: new _RunStore(runsDir, id), state: JSON.parse(readFileSync5(path3, "utf8")) };
   }
   /** Write-then-rename, so a crash mid-write can't corrupt the checkpoint that resume depends on. */
@@ -18201,7 +18203,7 @@ function extractText(raw) {
 }
 
 // src/live.ts
-import { appendFileSync as appendFileSync3, existsSync as existsSync6, readFileSync as readFileSync7 } from "node:fs";
+import { appendFileSync as appendFileSync3, existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
 import { join as join7 } from "node:path";
 var FILE2 = "live.jsonl";
 var LiveLog = class {
@@ -18212,7 +18214,7 @@ var LiveLog = class {
   constructor(runDir) {
     this.path = join7(runDir, FILE2);
     let last = 0;
-    if (existsSync6(this.path)) {
+    if (existsSync7(this.path)) {
       for (const line of readFileSync7(this.path, "utf8").split("\n")) {
         try {
           const c = JSON.parse(line).call;
@@ -19090,7 +19092,7 @@ function splitRef(ref) {
 }
 
 // src/ui/server.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync8, statSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync4, readFileSync as readFileSync8, statSync, writeFileSync as writeFileSync4 } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join as join10, resolve as resolve3, sep } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -19279,7 +19281,7 @@ var STOP_REPEAT_MS = 1e4;
 var PING_MS = 15e3;
 var MAX_BODY = 10 * 1024 * 1024;
 var MAX_ARG = 8e3;
-var UI_DIR = ["../web/", "./web/", "../../dist/web/"].map((rel) => fileURLToPath3(new URL(rel, import.meta.url))).find((dir) => existsSync7(dir)) ?? fileURLToPath3(new URL("../../dist/web/", import.meta.url));
+var UI_DIR = ["../web/", "../../dist/web/"].map((rel) => fileURLToPath3(new URL(rel, import.meta.url))).find((dir) => existsSync8(dir)) ?? fileURLToPath3(new URL("../../dist/web/", import.meta.url));
 var ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 var HttpError = class extends Error {
   constructor(status, message) {
@@ -19327,9 +19329,9 @@ async function startServer(opts) {
     });
     pending.set(logId, pid);
   };
-  const starting = (id) => ID_RE.test(id) && !existsSync7(join10(runDir(id), "state.json")) && workerPid(id) !== void 0;
+  const starting = (id) => ID_RE.test(id) && !existsSync8(join10(runDir(id), "state.json")) && workerPid(id) !== void 0;
   function failedStart(id) {
-    if (!ID_RE.test(id) || existsSync7(join10(runDir(id), "state.json")) || workerPid(id) !== void 0) return void 0;
+    if (!ID_RE.test(id) || existsSync8(join10(runDir(id), "state.json")) || workerPid(id) !== void 0) return void 0;
     let log;
     try {
       log = readFileSync8(join10(runDir(id), "worker.log"), "utf8");
@@ -19344,7 +19346,7 @@ ${tail || "(its worker.log is empty)"}`;
     if (starting(id)) throw new HttpError(503, `Idea "${id}" is starting; try again`);
     const failed = failedStart(id);
     if (failed) throw new HttpError(500, failed);
-    if (!ID_RE.test(id) || !existsSync7(join10(runDir(id), "state.json"))) throw new HttpError(404, `No idea "${id}"`);
+    if (!ID_RE.test(id) || !existsSync8(join10(runDir(id), "state.json"))) throw new HttpError(404, `No idea "${id}"`);
     try {
       return RunStore.load(runsDir, id).state;
     } catch {
@@ -19646,7 +19648,7 @@ var TYPES = {
 function serveStatic(req, res, pathname) {
   if (req.method !== "GET" && req.method !== "HEAD") return json(res, 404, { error: "Not found" });
   const index = join10(UI_DIR, "index.html");
-  if (!existsSync7(index)) {
+  if (!existsSync8(index)) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end("<!doctype html><title>ideate</title><p>The UI isn't built yet (no dist/web). Run npm run build, then restart <code>ideate ui</code>.</p>");
     return;

@@ -10,6 +10,8 @@ import type { RunState } from "../src/store.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = ["--import", "tsx", join(ROOT, "src", "cli.ts")];
+/** An empty pool, so the CLI never reads the developer's real ~/.claudes. */
+const ENV = { ...process.env, CLAUDES_BASE: mkdtempSync(join(tmpdir(), "ideate-proposal-base-")) };
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "ideate-proposal-"));
@@ -22,7 +24,7 @@ function setup() {
   const planPath = join(dir, "plan.md");
   writeFileSync(planPath, "# My plan\n\n1. Do the thing.\n");
   const ideate = (...args: string[]) =>
-    spawnSync(process.execPath, [...CLI, ...args, "--config", cfgPath], { encoding: "utf8", cwd: ROOT });
+    spawnSync(process.execPath, [...CLI, ...args, "--config", cfgPath], { encoding: "utf8", cwd: ROOT, env: ENV });
   return { dir, runsDir, planPath, ideate };
 }
 

@@ -10,6 +10,8 @@ import type { RunState } from "../src/store.js";
 import { isInterrupted, liveness, startHeartbeat } from "../src/worker.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+/** An empty pool, so the CLI never reads the developer's real ~/.claudes. */
+const ENV = { ...process.env, CLAUDES_BASE: mkdtempSync(join(tmpdir(), "ideate-worker-base-")) };
 const children = new Set<ChildProcess>();
 after(() => {
   for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill("SIGKILL");
@@ -45,7 +47,7 @@ function mockConfig(mock: Record<string, unknown> = {}, maxRounds = 1): { path: 
 }
 
 function cli(args: string[]): { child: ChildProcess; done: Promise<{ code: number | null; stderr: string }> } {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", ...args], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", ...args], { cwd: ROOT, env: ENV, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
   let stderr = "";
   child.stderr!.on("data", (d) => (stderr += d));

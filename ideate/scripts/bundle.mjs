@@ -60,7 +60,7 @@ function files(base, path) {
   if (!stat.isDirectory()) return [path];
   return readdirSync(full, { recursive: true, withFileTypes: true })
     .filter((e) => e.isFile())
-    .map((e) => relative(base, join(e.parentPath, e.name)).split("\\").join("/"));
+    .map((e) => relative(base, join(e.parentPath ?? e.path, e.name)).split("\\").join("/"));
 }
 
 function differences(expected, actual) {

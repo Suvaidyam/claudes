@@ -15,6 +15,8 @@ import type { IdeaDetail } from "../src/ui/types.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = [process.execPath, "--import", "tsx", join(ROOT, "src", "cli.ts")];
+// Workers inherit this process's env: an empty pool keeps them off the developer's real ~/.claudes.
+process.env.CLAUDES_BASE = mkdtempSync(join(tmpdir(), "ideate-pool-"));
 const FINAL = ["converged", "max_rounds", "stagnated", "stopped", "failed", "paused_quota"];
 
 type Server = Awaited<ReturnType<typeof startServer>>;

@@ -34,7 +34,9 @@ test("review skill is named review and is path-free", () => {
   assert.ok(!text.includes(" cd "));
 });
 
-const hasClaude = spawnSync("claude", ["--version"], { timeout: 30000 }).status === 0;
+const hasClaude = spawnSync("claude", ["--version"], {
+  env: { ...process.env, CLAUDE_CONFIG_DIR: mkdtempSync(join(tmpdir(), "ideate-plugin-probe-")) }, timeout: 30000,
+}).status === 0;
 test("claude can add the marketplace and install the plugin", { skip: !hasClaude }, () => {
   const env = { ...process.env, CLAUDE_CONFIG_DIR: mkdtempSync(join(tmpdir(), "ideate-plugin-")) };
   const claude = (args: string[]) =>

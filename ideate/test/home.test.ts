@@ -39,6 +39,13 @@ test("an invalid config names its path and is left untouched", () => {
   assert.equal(readFileSync(path, "utf8"), "{not json");
 });
 
+test("a config that fails the schema names its path", () => {
+  const home = tmp();
+  const path = join(home, "config.json");
+  writeFileSync(path, JSON.stringify({ primary: "p", secondaries: [], providers: {} }));
+  assert.throws(() => loadConfig(path), (e: Error) => e.message.startsWith(`Config ${path} is invalid: `));
+});
+
 test("an absolute runsDir is kept", () => {
   const home = tmp();
   const mock = { type: "mock" };
@@ -64,7 +71,7 @@ test("the CLI uses IDEATE_HOME and ignores a config.json in the cwd", () => {
   const tsx = import.meta.resolve("tsx");
   const res = spawnSync(process.execPath, ["--import", tsx, join(ROOT, "src", "cli.ts"),
     "run", "--proposal", "x", "--rounds", "1", "--id", "t1"], {
-    encoding: "utf8", cwd, env: { ...process.env, IDEATE_HOME: home },
+    encoding: "utf8", cwd, env: { ...process.env, IDEATE_HOME: home, CLAUDES_BASE: tmp() },
   });
   assert.equal(res.status, 2, res.stderr);
   const state = JSON.parse(readFileSync(join(home, "runs", "t1", "state.json"), "utf8"));

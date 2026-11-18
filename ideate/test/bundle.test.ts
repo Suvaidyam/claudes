@@ -30,7 +30,7 @@ function bundle(out: string): void {
 function files(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((e) => e.isFile())
-    .map((e) => relative(dir, join(e.parentPath, e.name)))
+    .map((e) => relative(dir, join(e.parentPath ?? e.path, e.name)))
     .sort();
 }
 

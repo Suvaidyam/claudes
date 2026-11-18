@@ -37,11 +37,12 @@ const MAX_BODY = 10 * 1024 * 1024;
 /** Texts longer than this, or starting with "@" (the CLI's file marker), go to the worker via a file. */
 const MAX_ARG = 8000;
 /**
- * The built front end, the first that exists relative to this module: "../web/" is the bundle's
- * web/ beside bin/ and also dist/web from dist/ui (compiled); "../../dist/web/" is dist/web from
- * src/ui (source). If none is built, the source path is kept and serveStatic says how to build it.
+ * The built front end, the first that exists relative to this module: "../web/" is dist/web from
+ * dist/ui/server.js (compiled) and the bundle's web/ from bin/ideate.mjs (bundled);
+ * "../../dist/web/" is dist/web from src/ui/server.ts (source). If none is built, the source path
+ * is kept and serveStatic says how to build it.
  */
-const UI_DIR = ["../web/", "./web/", "../../dist/web/"]
+const UI_DIR = ["../web/", "../../dist/web/"]
   .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
   .find((dir) => existsSync(dir)) ?? fileURLToPath(new URL("../../dist/web/", import.meta.url));
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
