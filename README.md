@@ -73,9 +73,40 @@ claudes
 See [SETUP.md](SETUP.md) for full installation steps, prerequisites, and
 troubleshooting.
 
+## The ideate tool
+
+`./setup.sh` also installs `ideate`, a tool that has other models (agy and
+Codex by default) review a plan, then lets Claude check their findings against
+your code. Setup installs two things:
+
+- the `ideate` command, a wrapper at `~/.claudes/marketplace/ideate` linked
+  into the same folder as `claudes` (or `~/bin`);
+- the `/ideate:review` command, a Claude Code plugin installed for every
+  profile linked to the shared layer. Asking in plain words, such as "review
+  it first", also starts it.
+
+It needs Node 20 or newer. The `ideate` command runs whichever `node` is first
+on PATH when you use it, so it needs Node 20 or newer there too. Without Node
+20 at setup, setup prints one line, skips ideate, and finishes the rest as
+usual; install Node and re-run `./setup.sh`.
+
+agy and Codex are separate CLIs from other vendors. Setup only reports whether
+each is found; install them and log in to each yourself. The `claude` CLI is
+needed to install the plugin.
+
+Config and runs live in `~/.claudes/shared/ideate/` (set `IDEATE_HOME` to move
+them). A profile that is not linked to the shared layer will not see the
+plugin; setup names such profiles, and `claudes migrate` links them.
+
+To update, `git pull` and run `./setup.sh` again. See
+[ideate/README.md](ideate/README.md) for the tool itself and
+[SETUP.md](SETUP.md) for details and troubleshooting.
+
 ## Project layout
 
 - `claudes.py` — the `claudes` CLI (stdlib-only, no third-party deps)
 - `setup.sh` — installer; wires up `requirements.txt`, runs `claudes.py install`, and falls back to a no-sudo PATH setup if needed
 - `requirements.txt` — Python dependencies (currently none)
 - `accounts.json`, `profiles/`, `shared/` — local per-machine account state, per-account Claude configs, and the cross-account shared session layer; gitignored, never committed
+- `ideate/` — the Node project for the `ideate` tool (TypeScript source, tests, chat app)
+- `plugins/ideate/`, `.claude-plugin/marketplace.json` — the Claude Code plugin and its marketplace; `bin/` and `web/` inside the plugin are generated from `ideate/` by `npm run bundle`

@@ -239,14 +239,72 @@ rather than duplicated.
 into `<CLAUDES_BASE>/shared/`. Nothing else under `~/.claude` (credentials,
 etc.) is touched.
 
+## The ideate tool
+
+`./setup.sh` (through `claudes.py install`) also sets up `ideate`, which sends
+a plan to other models for an adversarial review. It installs:
+
+- the `ideate` command. Setup copies the plugin files to `<base>/marketplace/`
+  (a fresh copy each run) and writes a wrapper at `<base>/marketplace/ideate`.
+  The wrapper sets `CLAUDES_BASE` if it isn't set and runs the bundled tool
+  with `node`. It is linked into `/usr/local/bin`, or into `~/bin` by
+  `setup.sh` when that isn't writable.
+- the `/ideate:review` command, from a plugin named `ideate` in a local
+  marketplace named `claude-pool`. It is installed once, into the shared
+  layer, so every profile linked to it gets it. Asking in plain words, such
+  as "review it first", also works.
+
+If `claude` is not on PATH, the command is installed but the plugin is not;
+install Claude Code and re-run `./setup.sh`.
+
+When the base is this repo clone itself, setup creates an untracked
+`marketplace/` folder in it. It is gitignored.
+
+**Node.** Node 20 or newer is required. If the `node` on PATH during setup is
+older or missing, setup prints `ideate: needs Node 20 or newer (found ...);
+skipped`, installs nothing for ideate, and the rest of setup finishes as
+usual. The `ideate` command runs whichever `node` is first on PATH when you
+use it, not the one checked during setup, so it needs Node 20 or newer there
+too.
+
+**Other CLIs.** agy and Codex are separate CLIs from other vendors. Setup only
+prints whether each is found. Install them and log in to each yourself;
+reviews need them.
+
+**Where things live.** The data home is `IDEATE_HOME`, else
+`<base>/shared/ideate/` (`~/.claudes/shared/ideate/` by default). It holds
+`config.json` (created from the example the first time the tool needs it) and
+`runs/`. A `config.json` in the folder you run from is not read; pass
+`--config <path>` to use another file.
+
+**Profiles.** The plugin is installed through a config folder at
+`<base>/shared/.plugin-host/`, which holds links to the shared `plugins/` and
+`settings.json`. Every profile reaches the plugin's files through it, so never
+delete it. A profile whose `plugins/` is not linked to the shared layer does
+not see the plugin; setup prints a line for each such profile, and `claudes
+migrate` links it.
+
+**Updating.** `git pull`, then `./setup.sh` again. Re-running setup uninstalls
+and reinstalls the plugin so every profile gets the new version. A plugin you
+had disabled stays disabled.
+
+Every ideate step that can't be done prints one line and setup carries on;
+ideate never makes setup fail.
+
 ## Config
 
 By default the pool lives at `~/.claudes`. Override with `CLAUDES_BASE` to
 point it elsewhere (e.g. this repo's own `profiles/` directory):
 
 ```bash
-export CLAUDES_BASE=/Users/amresh/labs/claude_pool
+export CLAUDES_BASE=<path to this repo clone>
 ```
+
+`CLAUDES_BIN_DIR` sets the folder that gets the `claudes` and `ideate` links
+(default `/usr/local/bin`). It is mainly for testing the installer: run it
+with `CLAUDES_BASE` and `CLAUDES_BIN_DIR` both pointing at temp folders.
+
+`IDEATE_HOME` moves the ideate data home; see [The ideate tool](#the-ideate-tool).
 
 ## Troubleshooting
 
@@ -258,3 +316,19 @@ run from a real terminal, it then relaunches your shell (`exec "$SHELL"
 `setup.sh` was run non-interactively (piped stdin, CI, etc.), it instead
 prints `Restart your terminal (or run: source <rc file>)`; do that manually
 in that case.
+
+**`ideate` runs the wrong tool, or an old one** — another `ideate` is earlier
+on PATH. Check with `command -v ideate`. When setup finds this it prints
+`Note: a different 'ideate' is earlier on PATH: <path>` and links its own into
+`~/bin`, which may still come later. Remove the other one, or put `~/bin` (or
+the folder `claudes` is in) first on PATH.
+
+**`/ideate:review` is missing in a profile** — check the setup output. Usual causes: the profile is not linked to the shared layer (run
+`claudes migrate`); `claude` was not on PATH during setup, or the plugin
+install failed (setup printed `ideate: plugin install failed ...`; re-run
+`./setup.sh`); or the plugin is disabled in the shared settings. Do not delete
+`<base>/shared/.plugin-host/`: every profile reaches the plugin's files through
+it. If you did, re-run `./setup.sh` to recreate it.
+
+**`ideate: command not found` or Node errors** — the command needs Node 20 or
+newer on PATH at the time you run it; check `node --version`.
