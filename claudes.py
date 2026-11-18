@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, re, select, shutil, stat, subprocess, sys, time
+import json, os, re, select, shutil, signal, stat, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -210,6 +210,41 @@ def _sync_last_session(name):
 
 IDEATE_PLUGIN = "ideate@claude-pool"
 
+def _plugin_timeout():
+    try:
+        return float(os.environ.get("CLAUDES_PLUGIN_TIMEOUT", "120"))
+    except ValueError:
+        return 120.0
+
+# Seconds each `claude plugin ...` call may take during install.
+PLUGIN_TIMEOUT = _plugin_timeout()
+
+def _run_bounded(cmd, timeout, env=None):
+    """Run cmd with stdin from /dev/null; (returncode, stdout, stderr).
+    The child gets its own session and its output goes to temp files, so on
+    timeout its whole process group is killed and nothing is left to wait on
+    (a grandchild holding a pipe would make subprocess.run wait forever).
+    Raises subprocess.TimeoutExpired after that."""
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        p = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                             start_new_session=True)
+        try:
+            p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            raise
+        out.seek(0)
+        err.seek(0)
+        return (p.returncode, out.read().decode(errors="replace"),
+                err.read().decode(errors="replace"))
+
 def _copy_marketplace(src_root, market):
     """Replace `market` with a fresh copy of the marketplace file and plugins/,
     built beside it first so a failed copy leaves the old one in place."""
@@ -232,8 +267,7 @@ def _node_version():
     if not node:
         return None, "none"
     try:
-        r = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
-        text = r.stdout.strip() or "unknown"
+        text = _run_bounded([node, "--version"], 30)[1].strip() or "unknown"
     except Exception:
         return None, "unknown"
     m = re.match(r"v?(\d+)\.", text)
@@ -246,9 +280,14 @@ def _sh_quote(s):
 def _write_ideate_wrapper(market):
     base = _sh_quote(str(BASE.resolve()))
     wrapper = market / "ideate"
+    # The Node check uses only sh built-ins: PATH may hold nothing but node.
     wrapper.write_text(
         "#!/bin/sh\n"
         f'export CLAUDES_BASE="${{CLAUDES_BASE:-{base}}}"\n'
+        'v=$(node --version 2>/dev/null) || v=""\n'
+        'm=${v#v}; m=${m%%.*}\n'
+        "case \"$m\" in ''|*[!0-9]*) echo \"ideate: needs Node 20 or newer; no working 'node' on PATH\" >&2; exit 127;; esac\n"
+        '[ "$m" -ge 20 ] || { echo "ideate: needs Node 20 or newer (found $v at $(command -v node))" >&2; exit 1; }\n'
         f'exec node "{base}/marketplace/plugins/ideate/bin/ideate.mjs" "$@"\n'
     )
     wrapper.chmod(0o755)
@@ -297,8 +336,9 @@ def _ideate_disabled():
 
 def _disable_ideate():
     """Set enabledPlugins[ideate@claude-pool] back to false, keeping every
-    other key; leaves a settings file it can't parse alone."""
-    path = SHARED / "settings.json"
+    other key; leaves a settings file it can't parse alone. Writes a temp file
+    beside the real file (through any symlink) and renames it into place."""
+    path = (SHARED / "settings.json").resolve()
     try:
         data = json.loads(path.read_text())
     except Exception:
@@ -309,20 +349,30 @@ def _disable_ideate():
     if not isinstance(enabled, dict):
         enabled = data["enabledPlugins"] = {}
     enabled[IDEATE_PLUGIN] = False
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".settings.json.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data, indent=2) + "\n")
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 def _run_claude(claude, args, env):
     """Run one `claude` command; an error line, or None when it succeeded."""
     try:
-        r = subprocess.run([claude] + args, env=env, capture_output=True, text=True,
-                           timeout=120, stdin=subprocess.DEVNULL)
+        code, stdout, stderr = _run_bounded([claude] + args, PLUGIN_TIMEOUT, env)
     except subprocess.TimeoutExpired:
         return f"'claude {' '.join(args)}' timed out"
     except OSError as e:
         return f"'claude {' '.join(args)}' could not run: {e}"
-    if r.returncode != 0:
-        lines = [l.strip() for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()]
-        return lines[-1] if lines else f"'claude {' '.join(args)}' exited {r.returncode}"
+    if code != 0:
+        lines = [l.strip() for l in (stdout + "\n" + stderr).splitlines() if l.strip()]
+        return lines[-1] if lines else f"'claude {' '.join(args)}' exited {code}"
     return None
 
 def _install_ideate_plugin(claude, market):
@@ -345,15 +395,16 @@ def _install_ideate_plugin(claude, market):
         commands.append(["plugin", "uninstall", "--keep-data", IDEATE_PLUGIN])
     commands.append(["plugin", "install", IDEATE_PLUGIN])
     error = None
-    uninstall_ran = False
     for args in commands:
         error = _run_claude(claude, args, env)
+        if error and "--keep-data" in args:
+            # An older claude may not know --keep-data: try once without it.
+            error = _run_claude(claude, [a for a in args if a != "--keep-data"], env)
         if error:
             break
-        uninstall_ran = uninstall_ran or args[1] == "uninstall"
-    # Restore "disabled" even when the install after a successful uninstall
-    # failed, so a later re-install doesn't come back enabled.
-    if was_disabled and (uninstall_ran or not error):
+    # Put "disabled" back whenever it was dropped, even by a step that then
+    # failed or timed out, so a later re-install doesn't come back enabled.
+    if was_disabled and not _ideate_disabled():
         _disable_ideate()
     return error
 

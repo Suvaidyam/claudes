@@ -44,13 +44,14 @@ add_path_line() {
         {
             echo ""
             echo "$PATH_LINE"
-        } >> "$RC_FILE"
+        } >> "$RC_FILE" || return 1
         echo "Added PATH entry to $RC_FILE"
     fi
     NEEDS_RELAUNCH=1
 }
 
 # The ideate command, when claudes.py install set it up and it isn't on PATH yet.
+# Never fails: setup must finish for people whose 'claudes' already works.
 link_ideate() {
     local wrapper="$BASE_DIR/marketplace/ideate"
     [ -f "$wrapper" ] || return 0
@@ -63,10 +64,13 @@ link_ideate() {
     if [ -n "$found" ]; then
         echo "Note: a different 'ideate' is earlier on PATH: $found"
     fi
-    mkdir -p "$HOME/bin"
-    ln -sfn "$wrapper" "$HOME/bin/ideate"
+    if [ -e "$HOME/bin/ideate" ] && [ ! -L "$HOME/bin/ideate" ]; then
+        echo "ideate: ~/bin/ideate exists and is not a link; left as it is"
+        return 0
+    fi
+    mkdir -p "$HOME/bin" && ln -sfn "$wrapper" "$HOME/bin/ideate" || { echo "ideate: could not link the command into ~/bin; skipped"; return 0; }
     echo "Linked: $HOME/bin/ideate -> $wrapper"
-    add_path_line
+    add_path_line || echo "ideate: could not add ~/bin to PATH in $RC_FILE"
 }
 
 if command -v claudes >/dev/null 2>&1; then

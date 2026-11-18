@@ -9,8 +9,8 @@
 import assert from "node:assert/strict";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
-  appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  realpathSync, symlinkSync, unlinkSync, writeFileSync,
+  appendFileSync, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync,
+  readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -262,6 +262,107 @@ test("a disabled plugin stays disabled when the install after the uninstall fail
   assert.equal(after.theme, "dark");
 });
 
+test("the wrapper names a Node older than 20 and exits 1", () => {
+  const s = sandbox([]);
+  writeFileSync(join(s.tmp, "tools", "node"), "#!/bin/sh\necho v18.19.0\n", { mode: 0o755 });
+  const r = s.install();
+  assert.equal(r.status, 0, out(r));
+  const run = s.run(join(s.base, "marketplace", "ideate"), ["list"]);
+  assert.equal(run.status, 1, out(run));
+  assert.ok(run.stderr.includes("needs Node 20 or newer (found v18.19.0"), out(run));
+});
+
+test("the wrapper exits 127 when there is no node", () => {
+  const s = sandbox([]);
+  const r = s.install();
+  assert.equal(r.status, 0, out(r));
+  const run = s.run(join(s.base, "marketplace", "ideate"), ["list"]);
+  assert.equal(run.status, 127, out(run));
+  assert.ok(run.stderr.includes("ideate: needs Node 20 or newer; no working 'node' on PATH"), out(run));
+});
+
+/** Pre-seed the shared layer with ideate installed and disabled, and a stand-in claude script. */
+function seededDisabled(s: Sandbox, claudeScript: string[]): void {
+  writeFileSync(join(s.tmp, "tools", "claude"), [...claudeScript, ""].join("\n"), { mode: 0o755 });
+  mkdirSync(join(s.base, "shared", "plugins"), { recursive: true });
+  writeFileSync(join(s.base, "shared", "plugins", "installed_plugins.json"),
+    JSON.stringify({ version: 2, plugins: { "ideate@claude-pool": [{ scope: "user" }] } }));
+  writeFileSync(join(s.base, "shared", "settings.json"),
+    JSON.stringify({ enabledPlugins: { "ideate@claude-pool": false }, theme: "dark" }));
+}
+
+const DROP_SETTING = 'printf \'{"enabledPlugins": {}, "theme": "dark"}\' > "$CLAUDE_CONFIG_DIR/settings.json"';
+
+test("a disabled plugin stays disabled when the uninstall drops the setting and then fails", () => {
+  const s = sandbox(["node"]);
+  seededDisabled(s, [
+    "#!/bin/sh",
+    'case "$2" in',
+    `  uninstall) ${DROP_SETTING}; echo boom; exit 1 ;;`,
+    "esac",
+    "exit 0",
+  ]);
+  const r = s.install();
+  assert.equal(r.status, 0, out(r));
+  assert.match(out(r), /^ideate: plugin install failed \(boom\); re-run setup\.sh to try again$/m);
+  const after = readJson(join(s.base, "shared", "settings.json"));
+  assert.equal(after.enabledPlugins["ideate@claude-pool"], false);
+  assert.equal(after.theme, "dark");
+});
+
+test("an older claude without --keep-data gets the uninstall retried without it", () => {
+  const s = sandbox(["node"]);
+  const log = join(s.tmp, "calls.log");
+  seededDisabled(s, [
+    "#!/bin/sh",
+    `case "$*" in *--keep-data*) echo "error: unknown option '--keep-data'" >&2; exit 1 ;; esac`,
+    `echo "$*" >> '${log}'`,
+    "exit 0",
+  ]);
+  const r = s.install();
+  assert.equal(r.status, 0, out(r));
+  assert.match(out(r), /^ideate: \/ideate:review installed for linked profiles$/m);
+  const calls = readFileSync(log, "utf8").split("\n");
+  assert.ok(calls.includes("plugin uninstall ideate@claude-pool"), calls.join("\n"));
+  assert.ok(calls.includes("plugin install ideate@claude-pool"), calls.join("\n"));
+});
+
+test("restoring the disabled setting keeps a linked settings.json a link", () => {
+  const s = sandbox(["node"]);
+  seededDisabled(s, [
+    "#!/bin/sh",
+    `case "$2" in uninstall) ${DROP_SETTING} ;; esac`,
+    "exit 0",
+  ]);
+  const realDir = join(s.tmp, "real");
+  mkdirSync(realDir);
+  const real = join(realDir, "settings.json");
+  const shared = join(s.base, "shared", "settings.json");
+  writeFileSync(real, readFileSync(shared));
+  unlinkSync(shared);
+  symlinkSync(real, shared);
+  const r = s.install();
+  assert.equal(r.status, 0, out(r));
+  assert.ok(lstatSync(shared).isSymbolicLink());
+  const after = readJson(real);
+  assert.equal(after.enabledPlugins["ideate@claude-pool"], false);
+  assert.equal(after.theme, "dark");
+  assert.deepEqual(readdirSync(realDir), ["settings.json"]);
+});
+
+test("a claude that hangs with a child holding its output does not hang install", () => {
+  const s = sandbox(["node", "sleep"]);
+  writeFileSync(join(s.tmp, "tools", "claude"), "#!/bin/sh\nsleep 300 &\nsleep 300\n", { mode: 0o755 });
+  const started = Date.now();
+  const r = spawnSync(join(s.tmp, "tools", "python3"), [join(root, "claudes.py"), "install"], {
+    env: { ...s.env, CLAUDES_PLUGIN_TIMEOUT: "2" }, encoding: "utf8", timeout: 60_000,
+  });
+  const seconds = (Date.now() - started) / 1000;
+  assert.equal(r.status, 0, out(r));
+  assert.ok(seconds < 20, `install took ${seconds}s`);
+  assert.match(out(r), /^ideate: plugin install failed \('claude plugin marketplace add .*' timed out\); re-run setup\.sh to try again$/m);
+});
+
 test("Node hidden: install still succeeds and skips ideate", () => {
   const s = sandbox([]);
   const r = s.install();
@@ -386,6 +487,44 @@ describe("setup.sh ideate block", () => {
     assert.equal(r.status, 0, out(r));
     assert.equal(realpathSync(join(f.home, "bin", "ideate")), join(f.base, "marketplace", "ideate"));
     assert.ok(!lstatExists(join(other, "ideate")));
+  });
+
+  const linkBody = (f: { base: string }) =>
+    `BASE_DIR=${JSON.stringify(f.base)}; NEEDS_RELAUNCH=0; RC_FILE=""\n` +
+    `link_ideate\necho "relaunch=$NEEDS_RELAUNCH rc=$RC_FILE"`;
+
+  test("a read-only rc file is named and setup carries on", () => {
+    const f = fixture(false);
+    const rc = join(f.home, ".zshrc");
+    writeFileSync(rc, "# rc\n");
+    chmodSync(rc, 0o444);
+    const r = setupFunctions(linkBody(f), f.env);
+    assert.equal(r.status, 0, out(r));
+    assert.ok(r.stdout.includes(`ideate: could not add ~/bin to PATH in ${rc}`), out(r));
+    assert.ok(r.stdout.includes(`rc=${rc}`), r.stdout);
+    assert.equal(realpathSync(join(f.home, "bin", "ideate")), join(f.base, "marketplace", "ideate"));
+  });
+
+  test("an unwritable ~/bin is named and setup carries on", () => {
+    const f = fixture(false);
+    mkdirSync(join(f.home, "bin"), { mode: 0o555 });
+    const r = setupFunctions(linkBody(f), f.env);
+    chmodSync(join(f.home, "bin"), 0o755);
+    assert.equal(r.status, 0, out(r));
+    assert.ok(r.stdout.includes("ideate: could not link the command into ~/bin; skipped"), out(r));
+    assert.ok(r.stdout.includes("relaunch=0"), r.stdout);
+    assert.ok(!lstatExists(join(f.home, "bin", "ideate")));
+  });
+
+  test("a real file at ~/bin/ideate is left as it is", () => {
+    const f = fixture(false);
+    mkdirSync(join(f.home, "bin"));
+    writeFileSync(join(f.home, "bin", "ideate"), "mine\n");
+    const r = setupFunctions(linkBody(f), f.env);
+    assert.equal(r.status, 0, out(r));
+    assert.ok(r.stdout.includes("ideate: ~/bin/ideate exists and is not a link; left as it is"), out(r));
+    assert.ok(r.stdout.includes("relaunch=0"), r.stdout);
+    assert.equal(readFileSync(join(f.home, "bin", "ideate"), "utf8"), "mine\n");
   });
 
   test("does nothing when the wrapper is missing", () => {
