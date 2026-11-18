@@ -363,6 +363,75 @@ test("a claude that hangs with a child holding its output does not hang install"
   assert.match(out(r), /^ideate: plugin install failed \('claude plugin marketplace add .*' timed out\); re-run setup\.sh to try again$/m);
 });
 
+test("a timed-out uninstall is not retried", () => {
+  const s = sandbox(["node", "sleep"]);
+  const log = join(s.tmp, "calls.log");
+  seededDisabled(s, [
+    "#!/bin/sh",
+    `echo "$*" >> '${log}'`,
+    'case "$2" in uninstall) exec sleep 300 ;; esac',
+    "exit 0",
+  ]);
+  const r = spawnSync(join(s.tmp, "tools", "python3"), [join(root, "claudes.py"), "install"], {
+    env: { ...s.env, CLAUDES_PLUGIN_TIMEOUT: "2" }, encoding: "utf8", timeout: 60_000,
+  });
+  assert.equal(r.status, 0, out(r));
+  assert.match(out(r), /^ideate: plugin install failed \('claude plugin uninstall --keep-data ideate@claude-pool' timed out\)/m);
+  const uninstalls = readFileSync(log, "utf8").split("\n").filter((l) => l.includes("uninstall"));
+  assert.deepEqual(uninstalls, ["plugin uninstall --keep-data ideate@claude-pool"]);
+});
+
+test("a disabled setting that can't be written back is named, and the report still prints", () => {
+  const s = sandbox(["node"]);
+  seededDisabled(s, [
+    "#!/bin/sh",
+    `case "$2" in uninstall) ${DROP_SETTING} ;; esac`,
+    "exit 0",
+  ]);
+  const realDir = join(s.tmp, "real");
+  mkdirSync(realDir);
+  const shared = join(s.base, "shared", "settings.json");
+  writeFileSync(join(realDir, "settings.json"), readFileSync(shared));
+  unlinkSync(shared);
+  symlinkSync(join(realDir, "settings.json"), shared);
+  chmodSync(realDir, 0o555);
+  let r: SpawnSyncReturns<string>;
+  try {
+    r = s.install();
+  } finally {
+    chmodSync(realDir, 0o755);
+  }
+  assert.equal(r.status, 0, out(r));
+  assert.match(out(r), /^ideate: could not restore the disabled setting \(.+\)$/m);
+  assert.match(out(r), /^ideate: command installed$/m);
+  assert.match(out(r), /^ideate: codex not found/m);
+});
+
+/** Wait up to `ms` for `pid` to be gone. */
+function gone(pid: number, ms = 5000): boolean {
+  const end = Date.now() + ms;
+  for (;;) {
+    try { process.kill(pid, 0); } catch { return true; }
+    if (Date.now() > end) return false;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+}
+
+test("an interrupted install stops the claude call it was waiting on", () => {
+  const s = sandbox(["node", "sleep"]);
+  const pids = join(s.tmp, "pids");
+  writeFileSync(join(s.tmp, "tools", "claude"),
+    `#!/bin/sh\nsleep 300 &\necho "$$ $!" > '${pids}'\nexec sleep 300\n`, { mode: 0o755 });
+  // spawnSync sends killSignal (here SIGINT, as Ctrl-C would) when its timeout passes.
+  const r = spawnSync(join(s.tmp, "tools", "python3"), [join(root, "claudes.py"), "install"], {
+    env: { ...s.env, CLAUDES_PLUGIN_TIMEOUT: "60" }, encoding: "utf8", timeout: 3_000, killSignal: "SIGINT",
+  });
+  assert.ok(existsSync(pids), out(r));
+  const alive = readFileSync(pids, "utf8").trim().split(" ").map(Number).filter((pid) => !gone(pid));
+  for (const pid of alive) process.kill(pid, "SIGKILL");
+  assert.deepEqual(alive, [], "still running after the interrupt");
+});
+
 test("Node hidden: install still succeeds and skips ideate", () => {
   const s = sandbox([]);
   const r = s.install();
@@ -419,9 +488,13 @@ test("setup.sh parses", () => {
   assert.equal(r.status, 0, out(r));
 });
 
-/** Run setup.sh's PATH_LINE and function definitions (not the script) and then `body`, in a sandboxed bash. */
-function setupFunctions(body: string, env: NodeJS.ProcessEnv): SpawnSyncReturns<string> {
-  const lines = readFileSync(join(root, "setup.sh"), "utf8").split("\n");
+/**
+ * Run setup.sh's PATH_LINE and function definitions (not the script) and then `body`, in a
+ * sandboxed bash. `source` is setup.sh's text; the working copy's by default.
+ */
+function setupFunctions(body: string, env: NodeJS.ProcessEnv,
+  source = readFileSync(join(root, "setup.sh"), "utf8")): SpawnSyncReturns<string> {
+  const lines = source.split("\n");
   const defs: string[] = [];
   let inside = false;
   for (const line of lines) {
@@ -503,6 +576,21 @@ describe("setup.sh ideate block", () => {
     assert.ok(r.stdout.includes(`ideate: could not add ~/bin to PATH in ${rc}`), out(r));
     assert.ok(r.stdout.includes(`rc=${rc}`), r.stdout);
     assert.equal(realpathSync(join(f.home, "bin", "ideate")), join(f.base, "marketplace", "ideate"));
+  });
+
+  test("the claudes block's PATH step with a read-only rc file behaves as it did at bf1b083", () => {
+    const before = spawnSync("git", ["-C", root, "show", "bf1b083:setup.sh"], { encoding: "utf8", timeout: 30_000 });
+    assert.equal(before.status, 0, out(before));
+    const results = [before.stdout, readFileSync(join(root, "setup.sh"), "utf8")].map((source) => {
+      const f = fixture(false);
+      const rc = join(f.home, ".zshrc");
+      writeFileSync(rc, "# rc\n");
+      chmodSync(rc, 0o444);
+      const body = 'NEEDS_RELAUNCH=0; RC_FILE=""\nadd_path_line\necho "after relaunch=$NEEDS_RELAUNCH"';
+      const r = setupFunctions(body, f.env, source);
+      return { status: r.status, stdout: r.stdout.split(f.home).join("<home>") };
+    });
+    assert.deepEqual(results[1], results[0]);
   });
 
   test("an unwritable ~/bin is named and setup carries on", () => {

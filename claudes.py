@@ -224,13 +224,15 @@ def _run_bounded(cmd, timeout, env=None):
     The child gets its own session and its output goes to temp files, so on
     timeout its whole process group is killed and nothing is left to wait on
     (a grandchild holding a pipe would make subprocess.run wait forever).
-    Raises subprocess.TimeoutExpired after that."""
+    The group is also killed when the wait is interrupted (Ctrl-C). Raises
+    subprocess.TimeoutExpired, or the interruption, after that."""
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         p = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                              start_new_session=True)
         try:
             p.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except BaseException:
+            # A timeout, or Ctrl-C (which no longer reaches the child's session).
             try:
                 os.killpg(p.pid, signal.SIGKILL)
             except OSError:
@@ -363,17 +365,18 @@ def _disable_ideate():
         raise
 
 def _run_claude(claude, args, env):
-    """Run one `claude` command; an error line, or None when it succeeded."""
+    """Run one `claude` command; (error line or None when it succeeded, its output)."""
     try:
         code, stdout, stderr = _run_bounded([claude] + args, PLUGIN_TIMEOUT, env)
     except subprocess.TimeoutExpired:
-        return f"'claude {' '.join(args)}' timed out"
+        return f"'claude {' '.join(args)}' timed out", ""
     except OSError as e:
-        return f"'claude {' '.join(args)}' could not run: {e}"
+        return f"'claude {' '.join(args)}' could not run: {e}", ""
+    output = stdout + "\n" + stderr
     if code != 0:
-        lines = [l.strip() for l in (stdout + "\n" + stderr).splitlines() if l.strip()]
-        return lines[-1] if lines else f"'claude {' '.join(args)}' exited {code}"
-    return None
+        lines = [l.strip() for l in output.splitlines() if l.strip()]
+        return (lines[-1] if lines else f"'claude {' '.join(args)}' exited {code}"), output
+    return None, output
 
 def _install_ideate_plugin(claude, market):
     """Install ideate@claude-pool into the shared plugins and settings, via a
@@ -396,16 +399,20 @@ def _install_ideate_plugin(claude, market):
     commands.append(["plugin", "install", IDEATE_PLUGIN])
     error = None
     for args in commands:
-        error = _run_claude(claude, args, env)
-        if error and "--keep-data" in args:
+        error, output = _run_claude(claude, args, env)
+        if error and "--keep-data" in args and (
+                "keep-data" in output or "unknown option" in output.lower()):
             # An older claude may not know --keep-data: try once without it.
-            error = _run_claude(claude, [a for a in args if a != "--keep-data"], env)
+            error, _ = _run_claude(claude, [a for a in args if a != "--keep-data"], env)
         if error:
             break
     # Put "disabled" back whenever it was dropped, even by a step that then
     # failed or timed out, so a later re-install doesn't come back enabled.
     if was_disabled and not _ideate_disabled():
-        _disable_ideate()
+        try:
+            _disable_ideate()
+        except OSError as e:
+            print(f"ideate: could not restore the disabled setting ({e})")
     return error
 
 def install_ideate(src_root):

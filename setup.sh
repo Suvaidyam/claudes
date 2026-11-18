@@ -44,7 +44,7 @@ add_path_line() {
         {
             echo ""
             echo "$PATH_LINE"
-        } >> "$RC_FILE" || return 1
+        } >> "$RC_FILE"
         echo "Added PATH entry to $RC_FILE"
     fi
     NEEDS_RELAUNCH=1
@@ -70,7 +70,16 @@ link_ideate() {
     fi
     mkdir -p "$HOME/bin" && ln -sfn "$wrapper" "$HOME/bin/ideate" || { echo "ideate: could not link the command into ~/bin; skipped"; return 0; }
     echo "Linked: $HOME/bin/ideate -> $wrapper"
-    add_path_line || echo "ideate: could not add ~/bin to PATH in $RC_FILE"
+    # add_path_line's exit status can't be trusted (bash 3.2 carries on past a
+    # failed append), so check first that the rc file can be appended to.
+    choose_rc_file
+    if grep -qsF "$PATH_LINE" "$RC_FILE" \
+        || { [ -e "$RC_FILE" ] && [ -w "$RC_FILE" ]; } \
+        || { [ ! -e "$RC_FILE" ] && [ -w "${RC_FILE%/*}" ]; }; then
+        add_path_line || true
+    else
+        echo "ideate: could not add ~/bin to PATH in $RC_FILE"
+    fi
 }
 
 if command -v claudes >/dev/null 2>&1; then
