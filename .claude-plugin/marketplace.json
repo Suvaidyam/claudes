@@ -1,0 +1,11 @@
+{
+  "name": "claude-pool",
+  "owner": { "name": "claude_pool" },
+  "plugins": [
+    {
+      "name": "ideate",
+      "source": "./plugins/ideate",
+      "description": "Multi-model ideation loop and plan review: other models critique a plan, then you check their findings against the code."
+    }
+  ]
+}

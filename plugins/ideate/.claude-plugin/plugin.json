@@ -1,0 +1,5 @@
+{
+  "name": "ideate",
+  "version": "0.1.0",
+  "description": "Multi-model ideation loop and plan review: other models critique a plan, then you check their findings against the code."
+}
