@@ -1,0 +1,28 @@
+{
+  "primary": "mock-primary",
+  "secondaries": [
+    "mock-a",
+    "mock-b"
+  ],
+  "loop": {
+    "maxRounds": 4,
+    "passScore": 8
+  },
+  "providers": {
+    "mock-primary": {
+      "type": "mock",
+      "skipDispositions": true
+    },
+    "mock-a": {
+      "type": "mock",
+      "startScore": 5,
+      "step": 1.5
+    },
+    "mock-b": {
+      "type": "mock",
+      "startScore": 6,
+      "step": 1.5
+    }
+  },
+  "runsDir": "runs"
+}

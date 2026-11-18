@@ -1,0 +1,37 @@
+{
+  "name": "ideation-loop",
+  "version": "0.1.0",
+  "description": "Primary AI ideates, secondary AIs critique, primary revises — in a bounded loop.",
+  "type": "module",
+  "bin": {
+    "ideate": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p . && vite build --config ui/vite.config.ts",
+    "typecheck": "tsc -p . --noEmit && tsc -p ui --noEmit",
+    "dev:ui": "vite --config ui/vite.config.ts",
+    "ideate": "tsx src/cli.ts",
+    "demo": "tsx src/cli.ts run --config config.mock.json --brief \"Offline-first CHW visit sync for 50k devices\"",
+    "test": "node --import tsx --test test/*.test.ts ui/src/lib/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "8.7.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "9.0.1",
+    "remark-gfm": "4.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "5.4.11"
+  }
+}
