@@ -124,6 +124,22 @@ describe("full install", { skip: !hasClaude && "claude is not installed" }, () =
     assert.ok(existsSync(join(s.base, "marketplace", ".claude-plugin", "marketplace.json")));
     assert.equal(realpathSync(join(s.bin, "ideate")), realpathSync(join(s.base, "marketplace", "ideate")));
   });
+
+  test("a plugin the user disabled stays disabled, other settings kept", () => {
+    const file = join(s.base, "shared", "settings.json");
+    const settings = readJson(file);
+    settings.enabledPlugins["ideate@claude-pool"] = false;
+    settings.theme = "dark";
+    writeFileSync(file, JSON.stringify(settings));
+    const again = s.install();
+    assert.equal(again.status, 0, out(again));
+    const after = readJson(file);
+    assert.equal(after.enabledPlugins["ideate@claude-pool"], false);
+    assert.equal(after.theme, "dark");
+    assert.ok(after.extraKnownMarketplaces["claude-pool"], JSON.stringify(after));
+    const installed = readJson(join(s.base, "shared", "plugins", "installed_plugins.json"));
+    assert.ok(installed.plugins["ideate@claude-pool"], JSON.stringify(installed));
+  });
 });
 
 test("re-running install delivers a changed skill", { skip: !hasClaude && "claude is not installed" }, () => {
@@ -152,6 +168,29 @@ test("re-running install delivers a changed skill", { skip: !hasClaude && "claud
     const skill = readFileSync(join(d, "skills", "review", "SKILL.md"), "utf8");
     assert.ok(skill.includes("MARKER-2"), `${d} has the old SKILL.md`);
   }
+});
+
+test("the repo itself as the base gets a marketplace copy", () => {
+  const s = sandbox(["node"]);
+  const src = join(s.tmp, "repo");
+  mkdirSync(src);
+  for (const p of [".claude-plugin", "plugins", "claudes.py"]) cpSync(join(root, p), join(src, p), { recursive: true });
+  const r = s.run(join(s.tmp, "tools", "python3"), [join(src, "claudes.py"), "install"], { CLAUDES_BASE: src });
+  assert.equal(r.status, 0, out(r));
+  assert.ok(!out(r).includes("not bundled"), out(r));
+  assert.ok(existsSync(join(src, "marketplace", "plugins", "ideate", "bin", "ideate.mjs")));
+  const list = s.run(join(s.bin, "ideate"), ["list"], { CLAUDES_BASE: src });
+  assert.equal(list.status, 0, out(list));
+  assert.ok(existsSync(join(src, "shared", "ideate", "config.json")));
+});
+
+test("a failed plugin install says to re-run setup", () => {
+  const s = sandbox(["node"]);
+  writeFileSync(join(s.tmp, "tools", "claude"), "#!/bin/sh\necho boom\nexit 1\n", { mode: 0o755 });
+  const r = s.install();
+  assert.equal(r.status, 0, out(r));
+  assert.match(out(r), /^ideate: plugin install failed \(boom\); re-run setup\.sh to try again$/m);
+  assert.match(out(r), /^ideate: \/ideate:review not installed$/m);
 });
 
 test("Node hidden: install still succeeds and skips ideate", () => {

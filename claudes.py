@@ -287,6 +287,30 @@ def _ideate_plugin_installed():
     except Exception:
         return False
 
+def _ideate_disabled():
+    """True when the shared settings have ideate@claude-pool explicitly disabled."""
+    try:
+        data = json.loads((SHARED / "settings.json").read_text())
+        return data.get("enabledPlugins", {}).get(IDEATE_PLUGIN) is False
+    except Exception:
+        return False
+
+def _disable_ideate():
+    """Set enabledPlugins[ideate@claude-pool] back to false, keeping every
+    other key; leaves a settings file it can't parse alone."""
+    path = SHARED / "settings.json"
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    enabled = data.get("enabledPlugins")
+    if not isinstance(enabled, dict):
+        enabled = data["enabledPlugins"] = {}
+    enabled[IDEATE_PLUGIN] = False
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
 def _install_ideate_plugin(claude, market):
     """Install ideate@claude-pool into the shared plugins and settings, via a
     config folder that holds only links to them. Returns an error line or None."""
@@ -301,6 +325,8 @@ def _install_ideate_plugin(claude, market):
     # changes with package.json, and `claude plugin install` (alone, or after
     # `claude plugin marketplace update claude-pool`) keeps the cached copy of
     # an installed version, so a changed skill would never reach the profiles.
+    # Uninstalling drops a user's "disabled" setting, so it is put back after.
+    was_disabled = _ideate_disabled()
     if _ideate_plugin_installed():
         commands.append(["plugin", "uninstall", "--keep-data", IDEATE_PLUGIN])
     commands.append(["plugin", "install", IDEATE_PLUGIN])
@@ -313,6 +339,8 @@ def _install_ideate_plugin(claude, market):
         if r.returncode != 0:
             lines = [l.strip() for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()]
             return lines[-1] if lines else f"'claude {' '.join(args)}' exited {r.returncode}"
+    if was_disabled:
+        _disable_ideate()
     return None
 
 def install_ideate(src_root):
@@ -320,7 +348,7 @@ def install_ideate(src_root):
     line per step it can't do; never raises."""
     src_root = Path(src_root).resolve()
     market = BASE / "marketplace"
-    if (src_root / "plugins" / "ideate").is_dir() and src_root != BASE.resolve():
+    if (src_root / "plugins" / "ideate").is_dir():
         _copy_marketplace(src_root, market)
     if not (market / "plugins" / "ideate").is_dir():
         print("ideate: not bundled with this copy; run setup.sh from the claude_pool clone")
@@ -340,7 +368,7 @@ def install_ideate(src_root):
     else:
         error = _install_ideate_plugin(claude, market)
         if error:
-            print(f"ideate: plugin install failed ({error})")
+            print(f"ideate: plugin install failed ({error}); re-run setup.sh to try again")
         else:
             plugin_installed = True
 
