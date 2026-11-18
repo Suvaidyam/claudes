@@ -64,7 +64,7 @@ link_ideate() {
         echo "Note: a different 'ideate' is earlier on PATH: $found"
     fi
     mkdir -p "$HOME/bin"
-    ln -sf "$wrapper" "$HOME/bin/ideate"
+    ln -sfn "$wrapper" "$HOME/bin/ideate"
     echo "Linked: $HOME/bin/ideate -> $wrapper"
     add_path_line
 }

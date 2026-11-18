@@ -311,6 +311,20 @@ def _disable_ideate():
     enabled[IDEATE_PLUGIN] = False
     path.write_text(json.dumps(data, indent=2) + "\n")
 
+def _run_claude(claude, args, env):
+    """Run one `claude` command; an error line, or None when it succeeded."""
+    try:
+        r = subprocess.run([claude] + args, env=env, capture_output=True, text=True,
+                           timeout=120, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return f"'claude {' '.join(args)}' timed out"
+    except OSError as e:
+        return f"'claude {' '.join(args)}' could not run: {e}"
+    if r.returncode != 0:
+        lines = [l.strip() for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()]
+        return lines[-1] if lines else f"'claude {' '.join(args)}' exited {r.returncode}"
+    return None
+
 def _install_ideate_plugin(claude, market):
     """Install ideate@claude-pool into the shared plugins and settings, via a
     config folder that holds only links to them. Returns an error line or None."""
@@ -330,18 +344,18 @@ def _install_ideate_plugin(claude, market):
     if _ideate_plugin_installed():
         commands.append(["plugin", "uninstall", "--keep-data", IDEATE_PLUGIN])
     commands.append(["plugin", "install", IDEATE_PLUGIN])
+    error = None
+    uninstall_ran = False
     for args in commands:
-        try:
-            r = subprocess.run([claude] + args, env=env, capture_output=True, text=True,
-                               timeout=120, stdin=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired:
-            return f"'claude {' '.join(args)}' timed out"
-        if r.returncode != 0:
-            lines = [l.strip() for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()]
-            return lines[-1] if lines else f"'claude {' '.join(args)}' exited {r.returncode}"
-    if was_disabled:
+        error = _run_claude(claude, args, env)
+        if error:
+            break
+        uninstall_ran = uninstall_ran or args[1] == "uninstall"
+    # Restore "disabled" even when the install after a successful uninstall
+    # failed, so a later re-install doesn't come back enabled.
+    if was_disabled and (uninstall_ran or not error):
         _disable_ideate()
-    return None
+    return error
 
 def install_ideate(src_root):
     """Set up the ideate command and the /ideate:review plugin. Prints one
@@ -353,13 +367,16 @@ def install_ideate(src_root):
     if not (market / "plugins" / "ideate").is_dir():
         print("ideate: not bundled with this copy; run setup.sh from the claude_pool clone")
         return
+    # Written before the Node check: the copy above removed the old wrapper,
+    # and existing ideate links must not be left dangling.
+    wrapper = _write_ideate_wrapper(market)
 
     major, version = _node_version()
     if major is None or major < 20:
         print(f"ideate: needs Node 20 or newer (found {version}); skipped")
         return
 
-    command_linked = _link_ideate(_write_ideate_wrapper(market))
+    command_linked = _link_ideate(wrapper)
 
     plugin_installed = False
     claude = shutil.which("claude")
