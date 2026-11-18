@@ -1,6 +1,7 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code
+in this repository.
 
 ## What this is
 
@@ -29,7 +30,8 @@ changing `ideate/src` or `ideate/ui`, run `npm run bundle` and commit the result
 Test install changes (`claudes.py install`, `setup.sh`) with `CLAUDES_BASE` and
 `CLAUDES_BIN_DIR` set to temp folders, never against a real `~/.claudes`.
 
-- Install/repair the `claudes` shortcut (also installs the `ideate` command and plugin): `./setup.sh`
+- Install/repair the `claudes` shortcut (also installs the `ideate` command and plugin):
+  `./setup.sh`
 - Run the CLI directly during development: `python3 claudes.py <command>`
   (e.g. `python3 claudes.py list`, `python3 claudes.py add <name>`)
 - Sanity-check the installer after editing it: `bash -n setup.sh`
@@ -80,9 +82,9 @@ Test install changes (`claudes.py install`, `setup.sh`) with `CLAUDES_BASE` and
 - **`ideate/` is a Node tool installed by `claudes.py install`.**
   `install_ideate()` copies `.claude-plugin/marketplace.json` and `plugins/` to
   `<base>/marketplace/`, writes a wrapper there (`<base>/marketplace/ideate`)
-  that runs `plugins/ideate/bin/ideate.mjs`, links it into `BIN_DIR`
-  (`CLAUDES_BIN_DIR`, default `/usr/local/bin`; `setup.sh` falls back to
-  `~/bin`), and installs the `ideate` plugin from marketplace `claude-pool`
+  that checks for Node 20 and runs `plugins/ideate/bin/ideate.mjs`, links it
+  into `BIN_DIR` (`CLAUDES_BIN_DIR`, default `/usr/local/bin`; `setup.sh` falls
+  back to `~/bin`), and installs the `ideate` plugin from marketplace `claude-pool`
   (command `/ideate:review`) through `<base>/shared/.plugin-host/`, a config
   folder of links to the shared `plugins/` and `settings.json`. Never delete
   that folder: profiles reach the plugin's files through it. Every ideate step

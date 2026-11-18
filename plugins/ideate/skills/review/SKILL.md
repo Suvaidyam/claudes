@@ -23,7 +23,8 @@ Resolve to an absolute path and check it exists.
 Plan mode allows read-only actions only, and a review writes a run folder. If plan mode is still
 on, tell the user to answer "review it first" in place of approving, and run once it is off.
 
-The text is sent to every reviewer's vendor (the reviewers are set in the `config.json` in ideate's data home; `ideate` prints its location when it creates it). If it plainly contains patient,
+The text is sent to every reviewer's vendor (the reviewers are set in the `config.json` in ideate's
+data home; `ideate` prints its location when it creates it). If it plainly contains patient,
 partner or government data, or secrets, stop and tell the user instead of running.
 
 ## 2. Start the review in the background

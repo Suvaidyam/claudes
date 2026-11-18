@@ -34,7 +34,7 @@ Config and runs live in the data home: `IDEATE_HOME` if set (a leading `~/` is e
 
 ### Which Claude account
 
-Inside a `claudes` session, `CLAUDE_CONFIG_DIR` is already set and that account is used. From a plain terminal, where it isn't set, the tool uses the pool's current account (the one named in `<claudes base>/current_profile`). If the pool's files can't be read, it falls back to Claude's default config.
+Inside a `claudes` session, `CLAUDE_CONFIG_DIR` is already set and that account is used. From a plain terminal, where it isn't set, the tool uses the pool's current account (the one named in `<claudes base>/current_profile`). If the pool's files can't be read, or that account's config folder doesn't exist, it falls back to Claude's default config. `ideate ui` uses the Claude account that was current when the server started; restart it after switching accounts with `claudes`.
 
 ### Development
 

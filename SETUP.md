@@ -266,9 +266,13 @@ skipped`. The `/ideate:review` plugin is not installed and the installer does
 not link the command, but the wrapper is still written to
 `<base>/marketplace/ideate` and `setup.sh` may still link it into `~/bin`.
 The rest of setup finishes as usual. The wrapper works once Node 20 or newer
-is first on PATH; re-run `./setup.sh` then to install the plugin. The `ideate` command runs whichever `node` is first on PATH when you
-use it, not the one checked during setup, so it needs Node 20 or newer there
-too.
+is first on PATH; re-run `./setup.sh` then to install the plugin.
+
+The `ideate` command runs whichever `node` is first on PATH when you use it,
+not the one checked during setup. The wrapper checks that `node` first: with
+no working `node` it prints `ideate: needs Node 20 or newer; no working 'node'
+on PATH` and exits 127; with an older one it prints `ideate: needs Node 20 or
+newer (found <version> at <path>)` and exits 1.
 
 **Other CLIs.** agy and Codex are separate CLIs from other vendors. Setup only
 prints whether each is found. Install them and log in to each yourself;
@@ -289,7 +293,8 @@ migrate` links it.
 
 **Updating.** `git pull`, then `./setup.sh` again. Re-running setup uninstalls
 and reinstalls the plugin so every profile gets the new version. A plugin you
-had disabled stays disabled.
+had disabled stays disabled. If `ideate ui` is running, restart it afterwards:
+it keeps serving the version it started with.
 
 Every ideate step that can't be done prints one line and setup carries on;
 ideate never makes setup fail.
@@ -306,6 +311,10 @@ export CLAUDES_BASE=<path to this repo clone>
 `CLAUDES_BIN_DIR` sets the folder that gets the `claudes` and `ideate` links
 (default `/usr/local/bin`). It is mainly for testing the installer: run it
 with `CLAUDES_BASE` and `CLAUDES_BIN_DIR` both pointing at temp folders.
+
+`CLAUDES_PLUGIN_TIMEOUT` sets how many seconds each `claude plugin ...` call
+may take during setup (default 120). A call that takes longer is stopped,
+together with anything it started, and setup carries on without the plugin.
 
 `IDEATE_HOME` moves the ideate data home; see [The ideate tool](#the-ideate-tool).
 
@@ -324,17 +333,22 @@ in that case.
 on PATH. Check with `command -v ideate`. When setup finds this it prints
 `Note: a different 'ideate' is earlier on PATH: <path>` and links its own into
 `~/bin`, which may still come later. Remove the other one, or put `~/bin` (or
-the folder `claudes` is in) first on PATH.
+the folder `claudes` is in) first on PATH. A `~/bin/ideate` that is a file
+rather than a link is left alone (`ideate: ~/bin/ideate exists and is not a
+link; left as it is`).
 
-**`/ideate:review` is missing in a profile** — check the setup output. Usual causes: the profile is not linked to the shared layer (run
+**`/ideate:review` is missing in a profile** — check the setup output. Usual
+causes: the profile is not linked to the shared layer (run
 `claudes migrate`); `claude` was not on PATH during setup, or the plugin
 install failed (setup printed `ideate: plugin install failed ...`; re-run
 `./setup.sh`); or the plugin is disabled in the shared settings. Do not delete
 `<base>/shared/.plugin-host/`: every profile reaches the plugin's files through
 it. If you did, re-run `./setup.sh` to recreate it.
 
-**`ideate: command not found` or Node errors** — the command needs Node 20 or
-newer on PATH at the time you run it; check `node --version`. If setup
-printed `ideate: needs Node 20 or newer ...; skipped`, the command may exist
-(linked by `setup.sh`) but fail until Node is fixed, and the plugin is not
-installed yet: put Node 20 or newer first on PATH and re-run `./setup.sh`.
+**`ideate: command not found` or Node errors** — if `ideate` prints
+`ideate: needs Node 20 or newer; no working 'node' on PATH` or
+`ideate: needs Node 20 or newer (found <version> at <path>)`, put Node 20 or
+newer first on PATH (see **Node** above); check with `node --version`. If
+setup printed `ideate: needs Node 20 or newer (found ...); skipped`, the
+command may exist (linked by `setup.sh`) but fail until Node is fixed, and the
+plugin is not installed yet: fix Node and re-run `./setup.sh`.
