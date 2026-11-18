@@ -87,8 +87,10 @@ your code. Setup installs two things:
 
 It needs Node 20 or newer. The `ideate` command runs whichever `node` is first
 on PATH when you use it, so it needs Node 20 or newer there too. Without Node
-20 at setup, setup prints one line, skips ideate, and finishes the rest as
-usual; install Node and re-run `./setup.sh`.
+20 at setup, setup prints one line and does not install the plugin or link the
+command itself; `setup.sh` may still link the wrapper into `~/bin`, and it
+works once Node 20 or newer is on PATH. The rest of setup finishes as usual.
+Install Node and re-run `./setup.sh` to install the plugin.
 
 agy and Codex are separate CLIs from other vendors. Setup only reports whether
 each is found; install them and log in to each yourself. The `claude` CLI is

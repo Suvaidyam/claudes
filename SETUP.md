@@ -262,8 +262,11 @@ When the base is this repo clone itself, setup creates an untracked
 
 **Node.** Node 20 or newer is required. If the `node` on PATH during setup is
 older or missing, setup prints `ideate: needs Node 20 or newer (found ...);
-skipped`, installs nothing for ideate, and the rest of setup finishes as
-usual. The `ideate` command runs whichever `node` is first on PATH when you
+skipped`. The `/ideate:review` plugin is not installed and the installer does
+not link the command, but the wrapper is still written to
+`<base>/marketplace/ideate` and `setup.sh` may still link it into `~/bin`.
+The rest of setup finishes as usual. The wrapper works once Node 20 or newer
+is first on PATH; re-run `./setup.sh` then to install the plugin. The `ideate` command runs whichever `node` is first on PATH when you
 use it, not the one checked during setup, so it needs Node 20 or newer there
 too.
 
@@ -331,4 +334,7 @@ install failed (setup printed `ideate: plugin install failed ...`; re-run
 it. If you did, re-run `./setup.sh` to recreate it.
 
 **`ideate: command not found` or Node errors** — the command needs Node 20 or
-newer on PATH at the time you run it; check `node --version`.
+newer on PATH at the time you run it; check `node --version`. If setup
+printed `ideate: needs Node 20 or newer ...; skipped`, the command may exist
+(linked by `setup.sh`) but fail until Node is fixed, and the plugin is not
+installed yet: put Node 20 or newer first on PATH and re-run `./setup.sh`.
