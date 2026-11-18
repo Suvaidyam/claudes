@@ -14,7 +14,9 @@ if ! command -v claude >/dev/null 2>&1; then
     echo "Install/log in to Claude Code before using 'claudes launch|switch|usage|best'." >&2
 fi
 
-if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
+# Only when requirements.txt lists a package: an empty one would still make pip
+# fail on an externally managed Python (Homebrew, PEP 668) and stop setup.
+if [ -f "$SCRIPT_DIR/requirements.txt" ] && grep -qvE '^[[:space:]]*(#|$)' "$SCRIPT_DIR/requirements.txt"; then
     if python3 -m pip --version >/dev/null 2>&1; then
         echo "Installing dependencies from requirements.txt"
         python3 -m pip install --user -r "$SCRIPT_DIR/requirements.txt"
