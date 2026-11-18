@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
+import { resolveConfigPath } from "./home.js";
 import { loadConfig, MAX_REVIEWERS, type Config } from "./config.js";
 import { emptyPlan, initialMaxRounds, prepareContinue, resumeMaxRounds, type ContinuePlan } from "./continue.js";
 import { formatRow, runWizard } from "./continueWizard.js";
@@ -31,7 +32,7 @@ Usage:
 <run> is a run ID or a row number from \`ideate list\`.
 
 Options:
-  --config <path>     Config file (default: config.json)
+  --config <path>     Config file (default: <data home>/config.json; data home is IDEATE_HOME or ~/.claudes/shared/ideate)
   --primary <name>    Override primary provider (run only)
   --reviewers <a,b>   Override secondary providers (run only)
   --rounds <n>        Override max rounds (run, resume)
@@ -77,7 +78,7 @@ async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
-      config: { type: "string", default: "config.json" },
+      config: { type: "string" },
       brief: { type: "string" },
       context: { type: "string" },
       proposal: { type: "string" },
@@ -112,8 +113,9 @@ async function main(): Promise<number> {
   if (values.proposal !== undefined && cmd !== "run") throw new Error("--proposal is only for run");
   if (values["branch-id"] !== undefined && values["from-round"] === undefined) throw new Error("--branch-id needs --from-round");
 
-  if (!existsSync(values.config!)) throw new Error(`Config not found: ${values.config}. Copy config.example.json to config.json.`);
-  const cfg = loadConfig(values.config!);
+  const { path: cfgPath, created } = resolveConfigPath(values.config);
+  if (created) console.error(`Created ${cfgPath} from the example config.`);
+  const cfg = loadConfig(cfgPath);
 
   const runs = () => listRuns(cfg.runsDir);
   const runIdOf = (what: string) => {
@@ -121,7 +123,7 @@ async function main(): Promise<number> {
     return resolveRunRef(runs(), runRef).id;
   };
 
-  if (cmd === "ui") return ui(values.config!, values.port as string | undefined, !values["no-open"]);
+  if (cmd === "ui") return ui(cfgPath, values.port as string | undefined, !values["no-open"]);
   if (cmd === "list") {
     printList();
     return 0;

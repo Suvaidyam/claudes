@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 
 const CommandProvider = z.object({
@@ -63,7 +64,15 @@ export const Config = z.object({
 export type Config = z.infer<typeof Config>;
 
 export function loadConfig(path: string): Config {
-  const cfg = Config.parse(JSON.parse(readFileSync(path, "utf8")));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    if (e instanceof SyntaxError) throw new Error(`Config ${path} is not valid JSON: ${e.message}`);
+    throw e;
+  }
+  const cfg = Config.parse(raw);
+  if (!isAbsolute(cfg.runsDir)) cfg.runsDir = resolve(dirname(resolve(path)), cfg.runsDir);
   for (const name of [cfg.primary, ...cfg.secondaries]) {
     if (!cfg.providers[name]) throw new Error(`Provider "${name}" not defined in config.providers`);
   }

@@ -66,7 +66,7 @@ const TitleBody = z.object({ title: text.pipe(z.string().max(200)) });
 export async function startServer(opts: ServerOptions): Promise<{ url: string; close(): Promise<void> }> {
   const cfgPath = resolve(opts.cfgPath);
   const cfg: Config = loadConfig(cfgPath);
-  const runsDir = resolve(cfg.runsDir);
+  const runsDir = cfg.runsDir;
   const cli = opts.cliCommand ?? defaultCliCommand();
   /**
    * Workers this server started that may not have written worker.json yet: one process per idea.
