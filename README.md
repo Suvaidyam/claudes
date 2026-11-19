@@ -36,7 +36,7 @@ info to help you choose.
 | `claudes <name>`         | Launch that account directly — skips the usage check entirely     |
 | `claudes list`           | List configured accounts                                         |
 | `claudes usage`          | Show session/weekly usage % for every account with an active session |
-| `claudes migrate`        | Link existing accounts (and the default `~/.claude` config) into the shared session layer, importing historical data |
+| `claudes migrate [--dry-run]` | Link existing accounts (and the default `~/.claude` config) into the shared session layer, importing historical data; originals are kept as `*.pre-claudes-<timestamp>`, and `--dry-run` only prints what it would do |
 
 Running bare `claudes` checks every account by actually running
 `claude -p /usage` under its config — all accounts are checked concurrently,
