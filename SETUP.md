@@ -227,30 +227,55 @@ This will:
    `claudes migrate`).
 2. Otherwise, merge its own `projects/`, `plugins/` and `cache/` into
    `<CLAUDES_BASE>/shared/`, file by file and including subfolders
-   (memory files, subagent logs, tool results — everything, not just
-   session `.jsonl` files):
-   - a file shared doesn't have yet is copied in;
+   (memory files, subagent logs, tool results, empty folders — everything,
+   not just session `.jsonl` files):
+   - a file shared doesn't have yet is copied in (through a temporary
+     `.<name>.claudes-partial` file that is renamed into place only when
+     complete, so shared never holds a half-copied file);
    - a file shared already has with the same content is left alone;
-   - a file shared already has with *different* content is a
-     **conflict**: shared's copy is kept as it is, and the path is listed
-     in the output;
+   - a file shared already has with *different* content — or a file where
+     the other side has a folder of the same name — is a **conflict**:
+     shared's copy is kept as it is, and the path is listed in the output;
    - a `memory/MEMORY.md` index present in both is merged: lines from the
      profile's copy that shared's lacks are appended, except a line whose
-     link already points at a file shared's index lists.
+     link already points at a file shared's index lists (an index that
+     isn't valid UTF-8 is treated as a plain conflict);
+   - a symlink inside the folder is copied as a symlink, unless it would
+     point at nothing from its new place in shared; it is then listed as
+     "link kept only in the backup".
 
-   `history.jsonl` entries are appended to shared's history (duplicates
-   skipped). `settings.json` is copied into shared only if shared's is
-   still empty (`{}`); otherwise shared's settings win.
-3. Once a folder's content is verified to be in the shared layer, the
+   `history.jsonl` entries are appended to shared's history, skipping
+   duplicates; lines that aren't valid JSON are carried across unchanged.
+
+   `settings.json` is copied into shared only if shared's is still empty
+   (`{}`). Otherwise shared's settings win and nothing is merged
+   automatically (merged rules would apply to every account): if the
+   profile's file differs, it is reported as a conflict — that profile's
+   own settings (hooks, permission rules, ...) are **no longer in effect**
+   — with the names of the top-level keys that differ or exist only in the
+   profile's file, and where its file was kept. Copy anything you still
+   want into the shared `settings.json` by hand.
+
+   If `projects/`, `plugins/`, `cache/`, `history.jsonl` or `settings.json`
+   is a symlink pointing somewhere other than the shared layer, the link
+   itself is kept (renamed as below, and the output says where it
+   pointed), and the content it points at is merged by the same rules;
+   that content is never moved or changed.
+3. Once an item's content is verified to be in the shared layer, the
    profile's original is **kept**, renamed to
    `<name>.pre-claudes-<timestamp>` next to it (for example
    `projects.pre-claudes-20260101-093000`), and replaced with a symlink
-   into the shared layer. The same goes for `history.jsonl` and
-   `settings.json`. If anything can't be copied (an unreadable file, a
-   full disk), that item is left exactly where it was, not linked, and the
-   error is printed; the other items are still linked. From then on plain
-   `claude` reads and writes the same shared context as every pool
-   account.
+   into the shared layer. If anything can't be copied (an unreadable
+   file, a full disk), that item is not renamed or linked and the error is
+   printed; the other items are still linked. The profile's own folder or
+   file is untouched, but files that were copied completely before the
+   error stay in shared (they are copies, so nothing is lost), and the
+   next run picks up where this one stopped. From then on plain `claude`
+   reads and writes the same shared context as every pool account.
+
+   It refuses to run on the shared layer itself (a profile path that is,
+   contains or lies inside `<CLAUDES_BASE>/shared/`), and skips an item
+   whose profile copy and shared copy are the same folder or file.
 4. Separately, copy in (without deleting) any leftover historical
    session/history data sitting in stale locations from earlier setups —
    old per-account directories directly under `~/.claudes/`, and orphaned
