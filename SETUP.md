@@ -45,7 +45,7 @@ claudes list
 claudes add <name>
 ```
 
-This creates `profiles/<name>/` and then immediately runs `claude auth
+Account names use letters, digits, `-` and `_` only, start with a letter or digit, and are at most 64 characters. This creates `profiles/<name>/` and then immediately runs `claude auth
 login` under that profile — the login link gets copied to your clipboard
 (see [Logging in](#logging-in) below) rather than opening a browser tab, so
 you can paste it into whichever browser you want. Its credentials/session
@@ -85,7 +85,7 @@ and otherwise asks for confirmation — pass `--force` to skip the prompt
 (e.g. from a script). If the current account is removed, the next bare
 `claudes` re-checks everything from scratch.
 
-`rename` only changes the name used to refer to the account; the profile
+`rename` applies the same naming rule to the new name (an existing account with an older name can still be renamed or removed). It only changes the name used to refer to the account; the profile
 directory, credentials, and sessions are untouched. This means the old
 name can't be reused via `claudes add` afterward — `add` will refuse
 since the renamed account still owns that profile directory. Renaming
