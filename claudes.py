@@ -15,16 +15,31 @@ GREEN="\033[92m"; YELLOW="\033[93m"; RED="\033[91m"; GRAY="\033[90m"; RESET="\03
 
 RESERVED = {"install","add","remove","rename","list","usage","migrate"}
 
+def _ensure_dir(path):
+    if os.path.lexists(path) and not path.is_dir():
+        if path.is_symlink():
+            print(f"{RED}{path} is a link to {os.readlink(path)}, which does not exist{RESET} — fix or remove that link, then try again.")
+        else:
+            print(f"{RED}{path} should be a folder but is not{RESET} — move it aside, then try again.")
+        return
+    path.mkdir(exist_ok=True)
+
+def _ensure_file(path, text):
+    if os.path.lexists(path):
+        if path.is_symlink() and not path.exists():
+            print(f"{RED}{path} is a link to {os.readlink(path)}, which does not exist{RESET} — fix or remove that link, then try again.")
+        return
+    path.write_text(text)
+
 def ensure():
-    BASE.mkdir(exist_ok=True)
-    PROFILES.mkdir(exist_ok=True)
-    SHARED.mkdir(exist_ok=True)
-    for d in ["projects", "plugins", "cache"]:
-        (SHARED / d).mkdir(exist_ok=True)
-    if not (SHARED / "history.jsonl").exists():
-        (SHARED / "history.jsonl").touch()
-    if not (SHARED / "settings.json").exists():
-        (SHARED / "settings.json").write_text("{}")
+    _ensure_dir(BASE)
+    _ensure_dir(PROFILES)
+    _ensure_dir(SHARED)
+    if SHARED.is_dir():
+        for d in ["projects", "plugins", "cache"]:
+            _ensure_dir(SHARED / d)
+        _ensure_file(SHARED / "history.jsonl", "")
+        _ensure_file(SHARED / "settings.json", "{}")
     if not ACCOUNTS.exists():
         ACCOUNTS.write_text('{"accounts": []}')
 
@@ -66,6 +81,45 @@ def _has_active_sessions(profile_path):
                 pass
     return False
 
+PARTIAL_SUFFIX = ".claudes-partial"
+
+def _copy_bytes(fsrc, fdst):
+    shutil.copyfileobj(fsrc, fdst)
+
+def _safe_copy(src, dst):
+    """Copy src to dst through a temp file in dst's folder, then os.replace it
+    into place, so dst is never left half-written. The temp file (named
+    `.<name>.claudes-partial`) is removed on any failure, Ctrl-C included."""
+    dst = Path(dst)
+    tmp = dst.with_name(f".{dst.name}{PARTIAL_SUFFIX}")
+    try:
+        with open(src, "rb") as fs, open(tmp, "wb") as fd:
+            _copy_bytes(fs, fd)
+        shutil.copystat(src, tmp)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+def _clean_partials(root):
+    """Remove temp files a killed copy left behind under root."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        for n in filenames:
+            if n.startswith(".") and n.endswith(PARTIAL_SUFFIX):
+                try:
+                    os.unlink(os.path.join(dirpath, n))
+                except OSError:
+                    pass
+
+def _rename(src, dst):
+    os.rename(src, dst)
+
+def _make_link(item, target):
+    Path(item).symlink_to(target)
+
 def _merge_projects(src_dir, dst_dir, dry_run=False):
     """Copy session .jsonl files from src into dst where dst has none yet.
 
@@ -83,54 +137,55 @@ def _merge_projects(src_dir, dst_dir, dry_run=False):
         for f in encoded.iterdir():
             if f.suffix == ".jsonl":
                 dst_f = dst_encoded / f.name
-                if not dst_f.exists():
+                if not os.path.lexists(dst_f):
                     if dry_run:
                         count += 1
                         continue
                     try:
                         dst_encoded.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(str(f), str(dst_f))
+                        _safe_copy(f, dst_f)
                         count += 1
                     except OSError as e:
                         print(f"    {YELLOW}Could not copy {f}: {e}{RESET}")
     return count
 
+def _history_key(line):
+    """Entries with a sessionId are keyed on (sessionId, timestamp); anything
+    else (no sessionId, not JSON, bad bytes) on the whole line."""
+    try:
+        e = json.loads(line)
+        if isinstance(e, dict) and e.get("sessionId"):
+            return ("s", str(e["sessionId"]), str(e.get("timestamp", "")))
+    except Exception:
+        pass
+    return ("l", line)
+
 def _merge_history(src_file, dst_file, dry_run=False):
-    """Append non-duplicate entries from src to dst. Returns count of new lines."""
+    """Append src's entries that dst lacks. Works on bytes, so undecodable or
+    non-JSON lines are carried across unchanged. Returns count of new lines."""
     src = Path(src_file)
     dst = Path(dst_file)
     try:
         if not src.is_file() or src.stat().st_size == 0:
             return 0
+        data = src.read_bytes()
     except OSError:
         return 0
-    seen = set()
-    if dst.is_file() and dst.stat().st_size > 0:
-        for line in dst.read_text().splitlines():
-            try:
-                e = json.loads(line)
-                seen.add((e.get("sessionId",""), str(e.get("timestamp",""))))
-            except Exception:
-                pass
-    try:
-        src_lines = src.read_text().splitlines()
-    except OSError:
-        return 0
+    existing = dst.read_bytes() if dst.is_file() else b""
+    seen = {_history_key(l) for l in existing.split(b"\n") if l.strip()}
     new_lines = []
-    for line in src_lines:
+    for line in data.split(b"\n"):
         if not line.strip():
             continue
-        try:
-            e = json.loads(line)
-            key = (e.get("sessionId",""), str(e.get("timestamp","")))
-            if key not in seen:
-                new_lines.append(line)
-                seen.add(key)
-        except Exception:
-            pass
+        k = _history_key(line)
+        if k not in seen:
+            new_lines.append(line)
+            seen.add(k)
     if new_lines and not dry_run:
-        with open(dst, "a") as f:
-            f.write("\n".join(new_lines) + "\n")
+        with open(dst, "ab") as f:
+            if existing and not existing.endswith(b"\n"):
+                f.write(b"\n")
+            f.write(b"\n".join(new_lines) + b"\n")
     return len(new_lines)
 
 SHARED_DIRS = ["projects", "plugins", "cache"]
@@ -161,11 +216,13 @@ _LINK_TARGET = re.compile(r"\]\(([^)]*)\)")
 
 def _merge_memory_index(src, dst, dry_run=False):
     """Append to dst each non-blank line of src it lacks, skipping a line whose
-    markdown link targets are all already in dst. Returns lines appended."""
-    dst_text = dst.read_text()
+    markdown link targets are all already in dst. Returns lines appended.
+    Raises UnicodeDecodeError when either file is not UTF-8."""
+    dst_text = Path(dst).read_bytes().decode("utf-8")
+    src_text = Path(src).read_bytes().decode("utf-8")
     have = set(dst_text.splitlines())
     add = []
-    for line in src.read_text().splitlines():
+    for line in src_text.splitlines():
         if not line.strip() or line in have:
             continue
         targets = _LINK_TARGET.findall(line)
@@ -174,118 +231,188 @@ def _merge_memory_index(src, dst, dry_run=False):
         add.append(line)
         have.add(line)
     if add and not dry_run:
-        with open(dst, "a") as f:
+        with open(dst, "a", encoding="utf-8") as f:
             if dst_text and not dst_text.endswith("\n"):
                 f.write("\n")
             f.write("\n".join(add) + "\n")
     return len(add)
 
+def _link_resolves_at(path, link):
+    """Would a symlink with this text, placed at path, point at something?"""
+    target = link if os.path.isabs(link) else os.path.join(os.path.dirname(path), link)
+    return os.path.exists(target)
+
 def _merge_tree(src, dst, dry_run=False):
     """Merge every file under src into dst without touching anything in src.
 
-    Absent files are copied (symlinks as symlinks); identical files are left;
-    differing files are conflicts (dst untouched), except a memory/MEMORY.md
-    index, whose missing lines are appended. Then verifies every src file is
-    accounted for in dst. Returns (copied, merged, conflicts, errors)."""
-    copied = merged = 0
-    conflicts, errors = [], []
-    handled = {}   # rel -> "copied" | "same" | "merged" | "conflict"
+    Absent files are copied atomically; folders (empty ones too) are created;
+    identical files are left; differing files, or a file where the other side
+    has a folder, are conflicts (dst untouched), except a UTF-8
+    memory/MEMORY.md index, whose missing lines are appended. Symlinks are
+    copied as symlinks once everything else is in place, unless they would
+    dangle from their new location (then they stay only in the backup).
+    Finally verifies every src entry is accounted for in dst."""
+    src = Path(src); dst = Path(dst)
+    handled = {}   # rel -> "copied" | "same" | "merged" | "conflict" | "backup_only"
+    errors = []
+    links = []
 
     def walk_error(e):
         errors.append(f"cannot read {e.filename}: {e.strerror}")
 
-    for dirpath, dirnames, filenames in os.walk(src, onerror=walk_error):
-        d = Path(dirpath)
-        entries = filenames + [n for n in dirnames if (d / n).is_symlink()]
-        for n in entries:
+    def walk(top):
+        """os.walk that yields (dir, files, symlinks) and prunes symlinked and
+        conflicting folders."""
+        for dirpath, dirnames, filenames in os.walk(top, onerror=walk_error):
+            d = Path(dirpath)
+            syms = [n for n in dirnames + filenames if (d / n).is_symlink()]
+            files = [n for n in filenames if n not in syms]
+            dirnames[:] = [n for n in dirnames if n not in syms
+                           and handled.get(str((d / n).relative_to(src))) != "conflict"]
+            yield d, dirnames, files, syms
+
+    for d, dirnames, files, syms in walk(src):
+        keep = []
+        for n in dirnames:
+            rel = str((d / n).relative_to(src)); t = dst / rel
+            if os.path.lexists(t) and (t.is_symlink() or not t.is_dir()):
+                handled[rel] = "conflict"
+                continue
+            if not dry_run:
+                try:
+                    t.mkdir(parents=True, exist_ok=True)
+                except OSError as e:
+                    errors.append(f"{rel}: {e.strerror or e}")
+                    continue
+            keep.append(n)
+        dirnames[:] = keep
+        links += [d / n for n in syms]
+        for n in files:
             s = d / n
-            rel = str(s.relative_to(src))
-            t = dst / rel
+            rel = str(s.relative_to(src)); t = dst / rel
             try:
-                if s.is_symlink():
-                    link = os.readlink(s)
-                    if t.is_symlink() and os.readlink(t) == link:
-                        handled[rel] = "same"
-                    elif os.path.lexists(t):
-                        handled[rel] = "conflict"
-                    else:
-                        if not dry_run:
-                            t.parent.mkdir(parents=True, exist_ok=True)
-                            os.symlink(link, t)
-                        handled[rel] = "copied"
+                if not s.is_file():
+                    errors.append(f"{rel}: not a regular file")
                 elif not os.path.lexists(t):
                     if dry_run:
                         with open(s, "rb"):
                             pass   # surface unreadable files in a dry run too
                     else:
-                        t.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(s, t)
+                        _safe_copy(s, t)
                     handled[rel] = "copied"
-                elif t.is_file() and not t.is_symlink() and _same_bytes(s, t):
+                elif t.is_symlink() or not t.is_file():
+                    handled[rel] = "conflict"
+                elif _same_bytes(s, t):
                     handled[rel] = "same"
-                elif n == "MEMORY.md" and d.name == "memory" and t.is_file() and not t.is_symlink():
-                    _merge_memory_index(s, t, dry_run)
-                    handled[rel] = "merged"
+                elif n == "MEMORY.md" and d.name == "memory":
+                    try:
+                        _merge_memory_index(s, t, dry_run)
+                        handled[rel] = "merged"
+                    except UnicodeDecodeError:
+                        handled[rel] = "conflict"
                 else:
                     handled[rel] = "conflict"
             except OSError as e:
                 errors.append(f"{rel}: {e.strerror or e}")
-        dirnames[:] = [n for n in dirnames if not (d / n).is_symlink()]
 
-    for rel, how in sorted(handled.items()):
-        if how == "copied":
-            copied += 1
-        elif how == "merged":
-            merged += 1
-        elif how == "conflict":
-            conflicts.append(rel)
+    for s in links:
+        rel = str(s.relative_to(src)); t = dst / rel
+        try:
+            link = os.readlink(s)
+            if t.is_symlink() and os.readlink(t) == link:
+                handled[rel] = "same"
+            elif os.path.lexists(t):
+                handled[rel] = "conflict"
+            elif not _link_resolves_at(t, link):
+                handled[rel] = "backup_only"
+            else:
+                if not dry_run:
+                    os.symlink(link, t)
+                handled[rel] = "copied"
+        except OSError as e:
+            errors.append(f"{rel}: {e.strerror or e}")
 
     if not dry_run and not errors:
-        # Verify: every file in src is now present in dst.
-        for dirpath, dirnames, filenames in os.walk(src, onerror=walk_error):
-            d = Path(dirpath)
-            for n in filenames + [n for n in dirnames if (d / n).is_symlink()]:
+        # Verify: every entry in src is now accounted for in dst.
+        for d, dirnames, files, syms in walk(src):
+            for n in dirnames:
+                rel = str((d / n).relative_to(src))
+                if not (dst / rel).is_dir():
+                    errors.append(f"{rel}/: folder missing from the shared copy after merging")
+            for n in files + syms:
                 s = d / n
-                rel = str(s.relative_to(src))
-                t = dst / rel
+                rel = str(s.relative_to(src)); t = dst / rel
                 how = handled.get(rel)
                 try:
-                    if how is None or not os.path.lexists(t):
+                    if how == "backup_only":
+                        ok = True
+                    elif how is None or not os.path.lexists(t):
                         ok = False
                     elif how in ("merged", "conflict"):
                         ok = True
                     elif s.is_symlink():
                         ok = t.is_symlink() and os.readlink(t) == os.readlink(s)
                     else:
-                        ok = t.is_file() and _same_bytes(s, t)
+                        ok = t.is_file() and not t.is_symlink() and _same_bytes(s, t)
                 except OSError:
                     ok = False
                 if not ok:
                     errors.append(f"{rel}: not found in the shared copy after merging")
-            dirnames[:] = [n for n in dirnames if not (d / n).is_symlink()]
-    return copied, merged, conflicts, errors
+
+    return {
+        "copied": sum(1 for v in handled.values() if v == "copied"),
+        "merged": sum(1 for v in handled.values() if v == "merged"),
+        "conflicts": sorted(k for k, v in handled.items() if v == "conflict"),
+        "backup_only": sorted(k for k, v in handled.items() if v == "backup_only"),
+        "errors": errors,
+    }
+
+def _settings_conflict(mine, shared):
+    """None when the profile's settings are already what shared has; otherwise
+    the sorted top-level keys that differ or exist only in the profile's file
+    ([] when either file is not a JSON object)."""
+    a = Path(mine).read_bytes(); b = Path(shared).read_bytes()
+    if a == b:
+        return None
+    try:
+        m = json.loads(a); s = json.loads(b)
+    except ValueError:
+        return []
+    if m == s:
+        return None
+    if not isinstance(m, dict) or not isinstance(s, dict):
+        return []
+    return sorted(k for k in m if k not in s or m[k] != s[k])
 
 def _new_result():
-    return {"copied": 0, "merged": 0, "conflicts": [], "backup": None,
+    return {"copied": 0, "merged": 0, "conflicts": [], "backup_only": [],
+            "settings_keys": None, "pointed_to": None, "backup": None,
             "linked": False, "error": None, "action": "none"}
+
+def _within(path, root):
+    return path == root or root in path.parents
 
 def setup_shared_links(profile_path, dry_run=False):
     """Point a profile's portable dirs/files at SHARED, merging first.
 
-    Never deletes anything: a profile's own folder or file is merged into the
-    shared layer, verified, then kept as `<name>.pre-claudes-<timestamp>`
-    before the symlink is made. Returns {item: result dict}."""
+    Never deletes anything: a profile's own folder or file (or a link that
+    points elsewhere) is merged into the shared layer, verified, then kept as
+    `<name>.pre-claudes-<timestamp>` before the symlink is made.
+    Returns {item: result dict}."""
     p = Path(profile_path)
     names = SHARED_DIRS + SHARED_FILES
     results = {n: _new_result() for n in names}
-    tag = f"{YELLOW}[dry run]{RESET} " if dry_run else ""
 
-    def is_ours(item, target):
-        return item.is_symlink() and item.resolve() == target.resolve()
+    pr = p.resolve(); sr = SHARED.resolve()
+    if _within(pr, sr) or _within(sr, pr):
+        print(f"{RED}Refusing to link {p}{RESET}: it is, contains or is inside the shared layer {SHARED}")
+        for r in results.values():
+            r["error"] = "refused: profile overlaps the shared layer"
+        return results
 
-    needs_merge = [n for n in names
-                   if not (p / n).is_symlink() and (p / n).exists()]
-    if needs_merge and _has_active_sessions(p):
+    needs_work = [n for n in names if os.path.lexists(p / n)
+                  and not ((p / n).is_symlink() and (p / n).resolve() == (SHARED / n).resolve())]
+    if needs_work and _has_active_sessions(p):
         print(f"Skipping {p} — Claude is running under it; close it and try again")
         for r in results.values():
             r["error"] = "skipped: Claude is running under this profile"
@@ -293,93 +420,127 @@ def setup_shared_links(profile_path, dry_run=False):
 
     if not dry_run:
         ensure()
+        _clean_partials(SHARED)
     stamp = _timestamp()
+    tag = f"{YELLOW}[dry run]{RESET} " if dry_run else ""
     print(f"{tag}Linking {p} to the shared layer")
 
     for name in names:
-        item = p / name
-        target = SHARED / name
-        r = results[name]
-        if is_ours(item, target):
-            r["linked"] = True
-            r["action"] = "already linked"
-            continue
-        if item.is_symlink():
-            r["action"] = "replace link"
-            if not dry_run:
-                item.unlink()
-        elif item.is_dir() and name in SHARED_DIRS:
-            r["action"] = "merge"
-            copied, merged, conflicts, errors = _merge_tree(item, target, dry_run)
-            r.update(copied=copied, merged=merged, conflicts=conflicts)
-            if errors:
-                r["error"] = "; ".join(errors)
-                print(f"  {RED}{name}: not linked — {r['error']}{RESET}")
-                print(f"    {item} was left where it is; fix the problem and run this again.")
-                continue
-        elif item.is_file() and name in SHARED_FILES:
-            r["action"] = "merge"
-            if not dry_run:
-                try:
-                    if name == "history.jsonl":
-                        r["merged"] = _merge_history(item, target)
-                    else:
-                        cur = target.read_text().strip() if target.is_file() else ""
-                        if cur in ("{}", ""):
-                            shutil.copy2(item, target)
-                            r["copied"] = 1
-                except OSError as e:
-                    r["error"] = f"{e.strerror or e}"
-                    print(f"  {RED}{name}: not linked — {r['error']}{RESET}")
-                    continue
-            elif name == "history.jsonl":
-                r["merged"] = _merge_history(item, target, dry_run=True)
-            else:
-                cur = target.read_text().strip() if target.is_file() else ""
-                r["copied"] = 1 if cur in ("{}", "") else 0
-        elif os.path.lexists(item):
-            r["action"] = "left alone"
-            r["error"] = f"{item} is neither a symlink nor a {'folder' if name in SHARED_DIRS else 'file'}; left alone"
-            print(f"  {RED}{name}: {r['error']}{RESET}")
-            continue
-        else:
-            r["action"] = "link"
+        try:
+            _link_item(p, name, results[name], dry_run, stamp)
+        except Exception as e:
+            r = results[name]
+            r["error"] = f"unexpected error: {e}"
+            r["linked"] = False
+            print(f"  {RED}{name}: not linked — {r['error']}{RESET}")
+    return results
 
-        if r["action"] == "merge":
-            backup = _backup_path(item, stamp)
-            r["backup"] = str(backup)
-            if not dry_run:
-                try:
-                    item.rename(backup)
-                except OSError as e:
-                    r["backup"] = None
-                    r["error"] = f"could not rename to {backup}: {e.strerror or e}"
-                    print(f"  {RED}{name}: not linked — {r['error']}{RESET}")
-                    continue
-        if not dry_run:
-            try:
-                item.symlink_to(target)
-            except OSError as e:
-                r["error"] = f"could not create the link: {e.strerror or e}"
-                print(f"  {RED}{name}: {r['error']}{RESET}")
-                continue
+def _link_item(p, name, r, dry_run, stamp):
+    item = p / name
+    target = SHARED / name
+    is_dir_item = name in SHARED_DIRS
+
+    def fail(msg, hint=None):
+        r["error"] = msg
+        print(f"  {RED}{name}: not linked — {msg}{RESET}")
+        if hint:
+            print(f"    {hint}")
+
+    if item.is_symlink() and item.resolve() == target.resolve():
         r["linked"] = True
+        r["action"] = "already linked"
+        return
+    if os.path.exists(item) and os.path.exists(target) and os.path.samefile(item, target):
+        return fail(f"{item} and {target} are the same {'folder' if is_dir_item else 'file'}; left alone",
+                    "Fix the shared layer by hand, then run this again.")
 
-        verb = "would " if dry_run else ""
-        if r["action"] == "merge":
-            parts = []
-            if name in SHARED_DIRS:
-                parts.append(f"{r['copied']} copied, {r['merged']} merged, {len(r['conflicts'])} conflicting")
-            elif name == "history.jsonl":
-                parts.append(f"{r['merged']} entries added")
+    exists = os.path.lexists(item)
+    if item.is_symlink():
+        r["pointed_to"] = os.readlink(item)
+    if not exists:
+        r["action"] = "link"
+    elif is_dir_item and item.is_dir():
+        r["action"] = "merge"
+        res = _merge_tree(item, target, dry_run)
+        r.update(copied=res["copied"], merged=res["merged"],
+                 conflicts=res["conflicts"], backup_only=res["backup_only"])
+        if res["errors"]:
+            return fail("; ".join(res["errors"]),
+                        f"{item} was left where it is; fix the problem and run this again.")
+    elif not is_dir_item and item.is_file():
+        r["action"] = "merge"
+        try:
+            if name == "history.jsonl":
+                r["merged"] = _merge_history(item, target, dry_run)
             else:
-                parts.append("copied to shared" if r["copied"] else "shared copy kept")
-            print(f"  {name}: {', '.join(parts)}; original {verb}{'be ' if dry_run else ''}kept at {r['backup']}")
+                cur = target.read_bytes().strip() if target.is_file() else b""
+                if cur in (b"{}", b""):
+                    if not dry_run:
+                        _safe_copy(item, target)
+                    r["copied"] = 1
+                else:
+                    keys = _settings_conflict(item, target)
+                    if keys is not None:
+                        r["conflicts"] = [name]
+                        r["settings_keys"] = keys
+        except OSError as e:
+            return fail(f"{e.strerror or e}", f"{item} was left where it is.")
+    elif item.is_symlink():
+        r["action"] = "keep link"   # dangling, or points at the wrong kind of thing
+    else:
+        return fail(f"{item} is not a {'folder' if is_dir_item else 'file'}; left alone")
+
+    backup = None
+    if exists:
+        backup = _backup_path(item, stamp)
+        r["backup"] = str(backup)
+        if not dry_run:
+            if _has_active_sessions(p):
+                r["backup"] = None
+                return fail("Claude started under this profile meanwhile; close it and try again")
+            try:
+                _rename(item, backup)
+            except OSError as e:
+                r["backup"] = None
+                return fail(f"could not rename to {backup}: {e.strerror or e}")
+    if not dry_run:
+        try:
+            _make_link(item, target)
+        except OSError as e:
+            msg = f"could not create the link: {e.strerror or e}"
+            if backup is not None:
+                try:
+                    _rename(backup, item)
+                    r["backup"] = None
+                    return fail(msg, f"{item} was put back as it was.")
+                except OSError:
+                    return fail(msg, f"The original is at {backup}; restore it with: mv '{backup}' '{item}'")
+            return fail(msg)
+    r["linked"] = True
+
+    kept = f"original {'would be ' if dry_run else ''}kept at {r['backup']}"
+    if r["pointed_to"] is not None:
+        print(f"  {name}: was a link to {r['pointed_to']}; that link {'would be ' if dry_run else 'is '}kept at {r['backup']}")
+    if r["action"] == "merge":
+        if is_dir_item:
+            print(f"  {name}: {r['copied']} copied, {r['merged']} merged, {len(r['conflicts'])} conflicting; {kept}")
             for c in r["conflicts"]:
                 print(f"    {YELLOW}conflict{RESET} {c} — shared copy kept; yours is in the backup")
-        elif r["action"] in ("link", "replace link"):
-            print(f"  {name}: {verb}{'link' if dry_run else 'linked'}")
-    return results
+            for c in r["backup_only"]:
+                print(f"    {YELLOW}link kept only in the backup{RESET} {c} — it would not resolve from the shared folder")
+        elif name == "history.jsonl":
+            print(f"  {name}: {r['merged']} entries added; {kept}")
+        elif r["conflicts"]:
+            keys = ", ".join(r["settings_keys"]) if r["settings_keys"] else "(could not compare keys)"
+            print(f"  {YELLOW}{name}: conflict{RESET} — this profile's own settings are no longer in effect; the shared settings.json is used")
+            print(f"    keys that differ or exist only in the profile's file: {keys}")
+            print(f"    the profile's file {'would be ' if dry_run else 'is '}kept at {r['backup']}")
+        else:
+            print(f"  {name}: {'copied to shared' if r['copied'] else 'same as shared'}; {kept}")
+    elif r["action"] == "keep link":
+        pass
+    else:
+        print(f"  {name}: {'would link' if dry_run else 'linked'}")
 
 def _sync_last_session(name):
     """Update lastSessionId per-project in the account's .claude.json."""
@@ -520,10 +681,12 @@ def _link_into(folder, name, target):
     item = folder / name
     if item.is_symlink() and item.resolve() == target.resolve():
         return
-    if item.is_dir() and not item.is_symlink():
-        shutil.rmtree(item)
-    elif item.exists() or item.is_symlink():
-        item.unlink()
+    if item.is_symlink():
+        item.unlink()   # only a link; nothing is lost
+    elif os.path.lexists(item):
+        backup = _backup_path(item, _timestamp())
+        _rename(item, backup)
+        print(f"  Kept the existing {item} at {backup}")
     item.symlink_to(target)
 
 def _ideate_plugin_installed():
@@ -1207,6 +1370,15 @@ def _choose_account():
     _login(name)
     return _choose_account()
 
+def _link_profile_safely(path, dry_run):
+    """setup_shared_links, but an unexpected error is reported, not raised,
+    so one profile cannot stop the others."""
+    try:
+        return setup_shared_links(path, dry_run=dry_run)
+    except Exception as e:
+        print(f"    {RED}{path}: not linked — unexpected error: {e}{RESET}")
+        return None
+
 def migrate(dry_run=False):
     """Set up shared session layer and import all historical data.
 
@@ -1230,7 +1402,7 @@ def migrate(dry_run=False):
         except KeyError:
             continue
         print(f"  Linking {a['name']} ({cp})...")
-        setup_shared_links(cp, dry_run=dry_run)
+        _link_profile_safely(cp, dry_run)
 
     # Fold the default `claude` config (used when CLAUDE_CONFIG_DIR isn't set)
     # into the shared layer too, so plain `claude` stays in sync with every
@@ -1238,7 +1410,7 @@ def migrate(dry_run=False):
     default_claude = HOME / ".claude"
     if str(default_claude) not in registered_paths and default_claude.is_dir():
         print("  Linking ~/.claude (default config)...")
-        setup_shared_links(default_claude, dry_run=dry_run)
+        _link_profile_safely(default_claude, dry_run)
 
     print("\nImporting remaining historical session data...")
     names = [a["name"] for a in d["accounts"]]
@@ -1260,16 +1432,23 @@ def migrate(dry_run=False):
 
     total_s = total_h = 0
     for src in sources:
-        ns = _merge_projects(src / "projects", SHARED / "projects", dry_run=dry_run)
-        nh = _merge_history(src / "history.jsonl", SHARED / "history.jsonl", dry_run=dry_run)
+        try:
+            ns = _merge_projects(src / "projects", SHARED / "projects", dry_run=dry_run)
+            nh = _merge_history(src / "history.jsonl", SHARED / "history.jsonl", dry_run=dry_run)
+        except Exception as e:
+            print(f"  {RED}{src}: not imported — {e}{RESET}")
+            continue
         if ns or nh:
-            would = "would import " if dry_run else ""
-            print(f"  {src}: {would}{ns} sessions (projects), {nh} history entries")
+            if dry_run:
+                print(f"  {src}: would import up to {ns} sessions (projects), up to {nh} history entries")
+            else:
+                print(f"  {src}: {ns} sessions (projects), {nh} history entries")
         total_s += ns
         total_h += nh
 
     if dry_run:
-        print(f"\nDry run done. {total_s} session files and {total_h} history entries would be imported; nothing was changed.")
+        print(f"\nDry run done. Up to {total_s} session files and {total_h} history entries would be imported"
+              " (an upper bound: some may already arrive through the linking above); nothing was changed.")
         return
     print(f"\nDone. {total_s} session files imported, {total_h} history entries merged.")
     print(f"Shared layer: {SHARED}")
@@ -1293,7 +1472,7 @@ if __name__=="__main__":
     elif find(cmd):
         launch(cmd)
     else:
-        print("Commands: install, add <name>, remove <name> [--force], rename <old> <new>, list, usage, migrate")
+        print("Commands: install, add <name>, remove <name> [--force], rename <old> <new>, list, usage, migrate [--dry-run]")
         print("Run 'claudes' with no arguments to pick an account and launch it.")
         print("Run 'claudes <name>' to launch a specific account directly.")
         names=sorted(a["name"] for a in load()["accounts"])
