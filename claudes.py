@@ -880,13 +880,34 @@ def _is_strict_descendant(path, root):
         return False
     return p!=r and r in p.parents
 
+def _same_folder(a, b):
+    """True if paths a and b are the same folder (case-insensitive when one does not exist)."""
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+        return str(Path(a).resolve()).lower()==str(Path(b).resolve()).lower()
+    except OSError:
+        return False
+
+def _other_user_of(path, skip_name, accounts):
+    """Name of another account whose config folder is `path`, or None."""
+    for a in accounts:
+        if a["name"]==skip_name:
+            continue
+        try:
+            if _same_folder(config_dir(a), path):
+                return a["name"]
+        except KeyError:
+            continue
+    return None
+
 def add(name):
     why=valid_account_name(name)
     if why:
         print(f"{RED}Invalid account name {name!r}: {why}{RESET} — use {NAME_RULE}."); return
     d=load()
-    if any(a["name"]==name for a in d["accounts"]):
-        print("Already exists"); return
+    if any(a["name"].lower()==name.lower() for a in d["accounts"]):
+        print("Already exists (account names are compared ignoring case)"); return
     p=PROFILES/name
     if p.resolve().parent!=PROFILES.resolve():
         print(f"{RED}Invalid account name {name!r}: its profile folder would not be directly inside profiles/{RESET} — use {NAME_RULE}."); return
@@ -895,7 +916,7 @@ def add(name):
             cp=config_dir(a)
         except KeyError:
             continue
-        if Path(cp).resolve()==p.resolve():
+        if _same_folder(cp, p):
             print(f"{RED}Refusing: '{p}' is already used by account '{a['name']}'{RESET} — probably left behind by a rename. Run 'claudes remove {a['name']}' first, or pick a different name (renaming '{a['name']}' won't free this directory).")
             return
     p.mkdir(parents=True, exist_ok=True)
@@ -921,17 +942,19 @@ def remove(name, force=False):
         if input(f"Remove account '{name}' and delete its profile? [y/N] ").strip().lower()!="y":
             print("Cancelled"); return
     d=load()
-    d["accounts"]=[x for x in d["accounts"] if x["name"]!=name]
-    save(d)
-    if CURRENT.exists() and CURRENT.read_text().strip()==name:
-        CURRENT.unlink()
     if cp:
+        other=_other_user_of(cp, name, d["accounts"])
         link=Path(cp)
-        if link.is_symlink():
+        if other:
+            print(f"{YELLOW}{cp} is still used by account '{other}' — left on disk; only the entry is removed.{RESET}")
+        elif link.is_symlink():
             # never follow the link: remove only the link, and only if it sits inside profiles/
             pr=PROFILES.resolve(); lp=link.parent.resolve()
             if lp==pr or pr in lp.parents:
-                link.unlink()
+                try:
+                    link.unlink()
+                except OSError as e:
+                    print(f"{RED}Could not remove {cp}: {e}{RESET} — account kept."); return
             else:
                 print(f"{YELLOW}{cp} is a link outside profiles/ — left on disk; remove it manually if desired.{RESET}")
         else:
@@ -940,7 +963,14 @@ def remove(name, force=False):
             if resolved in unsafe or any(resolved in u.parents for u in unsafe) or not _is_strict_descendant(resolved, PROFILES):
                 print(f"{YELLOW}{cp} is not a folder inside profiles/ — left on disk; remove it manually if desired.{RESET}")
             elif resolved.is_dir():
-                shutil.rmtree(str(resolved))
+                try:
+                    shutil.rmtree(str(resolved))
+                except OSError as e:
+                    print(f"{RED}Could not delete {cp}: {e}{RESET} — account kept."); return
+    d["accounts"]=[x for x in d["accounts"] if x["name"]!=name]
+    save(d)
+    if CURRENT.exists() and CURRENT.read_text().strip()==name:
+        CURRENT.unlink()
     print("Removed", name)
 
 def rename(old, new):
@@ -950,6 +980,8 @@ def rename(old, new):
     d=load()
     if not any(a["name"]==old for a in d["accounts"]):
         print("Not found"); return
+    if any(a["name"].lower()==new.lower() and a["name"]!=old for a in d["accounts"]):
+        print("Already exists (account names are compared ignoring case)"); return
     if any(a["name"]==new for a in d["accounts"]):
         print("Already exists"); return
     for a in d["accounts"]:

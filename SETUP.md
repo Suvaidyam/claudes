@@ -45,7 +45,7 @@ claudes list
 claudes add <name>
 ```
 
-Account names use letters, digits, `-` and `_` only, start with a letter or digit, and are at most 64 characters. This creates `profiles/<name>/` and then immediately runs `claude auth
+Account names use letters, digits, `-` and `_` only, start with a letter or digit, and are at most 64 characters, and are compared ignoring case (`Work` and `work` are the same name). This creates `profiles/<name>/` and then immediately runs `claude auth
 login` under that profile — the login link gets copied to your clipboard
 (see [Logging in](#logging-in) below) rather than opening a browser tab, so
 you can paste it into whichever browser you want. Its credentials/session
@@ -82,7 +82,7 @@ claudes rename alice bob
 `remove` deletes both the `accounts.json` entry and the account's profile
 directory. It refuses if Claude is currently running under that account,
 and otherwise asks for confirmation — pass `--force` to skip the prompt
-(e.g. from a script). If the current account is removed, the next bare
+(e.g. from a script). A config folder outside `profiles/`, or one shared with another account, is left on disk and only the entry is removed. If the current account is removed, the next bare
 `claudes` re-checks everything from scratch.
 
 `rename` applies the same naming rule to the new name (an existing account with an older name can still be renamed or removed). It only changes the name used to refer to the account; the profile

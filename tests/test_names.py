@@ -154,6 +154,61 @@ class Remove(Base):
         self.assertEqual(self.names(), [])
 
 
+class Collisions(Base):
+    def case_insensitive_fs(self):
+        write(self.tmp / "casetest")
+        return (self.tmp / "CASETEST").exists()
+
+    def test_add_case_variant_refused(self):
+        self.m.add("work")
+        self.calls.clear()
+        before = listing(self.tmp)
+        self.m.add("Work")
+        self.assertEqual(before, listing(self.tmp))
+        self.assertEqual(self.names(), ["work"])
+        self.assertEqual(self.calls, [])
+
+    def test_add_refused_when_folder_already_used(self):
+        write(self.m.PROFILES / "work" / "f", "1")
+        self.seed([("other", self.m.PROFILES / "work")])
+        before = listing(self.tmp)
+        self.m.add("work")
+        self.assertEqual(before, listing(self.tmp))
+        self.assertEqual(self.names(), ["other"])
+        self.assertEqual(self.calls, [])
+
+    def test_rename_case_variant_refused(self):
+        self.seed([("a", self.m.PROFILES / "a"), ("work", self.m.PROFILES / "work")])
+        self.m.rename("a", "WORK")
+        self.assertEqual(self.names(), ["a", "work"])
+
+    def test_remove_shared_folder_kept(self):
+        write(self.m.PROFILES / "a" / "f", "1")
+        self.seed([("a", self.m.PROFILES / "a"), ("b", self.m.PROFILES / "a")])
+        self.m.remove("b", force=True)
+        self.assertTrue((self.m.PROFILES / "a" / "f").exists())
+        self.assertEqual(self.names(), ["a"])
+
+    def test_remove_case_variant_path_kept(self):
+        if not self.case_insensitive_fs():
+            self.skipTest("case-sensitive filesystem")
+        write(self.m.PROFILES / "work" / "f", "1")
+        self.seed([("work", self.m.PROFILES / "work"), ("Work", self.m.PROFILES / "Work")])
+        self.m.remove("Work", force=True)
+        self.assertTrue((self.m.PROFILES / "work" / "f").exists())
+        self.assertEqual(self.names(), ["work"])
+
+    def test_failed_delete_keeps_entry(self):
+        write(self.m.PROFILES / "a" / "f", "1")
+        self.seed([("a", self.m.PROFILES / "a")])
+
+        from unittest import mock
+        with mock.patch.object(self.m.shutil, "rmtree", side_effect=OSError("nope")):
+            self.m.remove("a", force=True)
+        self.assertEqual(self.names(), ["a"])
+        self.assertTrue((self.m.PROFILES / "a" / "f").exists())
+
+
 class Imports(unittest.TestCase):
     def test_stdlib_only(self):
         import sys
