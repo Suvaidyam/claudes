@@ -109,7 +109,7 @@ point the account at the shared profile directory itself).
 | `claudes <name>`           | Launch that account directly — skips the usage check entirely |
 | `claudes list`             | List configured accounts                                  |
 | `claudes usage`            | Show session/weekly usage % for every account with an active session |
-| `claudes migrate`          | Link accounts (and the default `~/.claude` config) into the shared session layer, importing historical data |
+| `claudes migrate [--dry-run]` | Link accounts (and the default `~/.claude` config) into the shared session layer, importing historical data; `--dry-run` only prints what it would do |
 
 `usage` and bare `claudes` check every account for real by running
 `claude -p /usage` under its config — all accounts are checked
@@ -212,27 +212,61 @@ If you already had accounts set up before this feature existed (or ran
 claudes migrate
 ```
 
+To see what it would do first, without changing anything on disk:
+
+```bash
+claudes migrate --dry-run
+```
+
 This will:
 
 1. For every registered account, and for the default `~/.claude` config
    (used whenever you run plain `claude` without `CLAUDE_CONFIG_DIR` set)
-   — skip it if a `claude` process is currently active under it (finish or
-   exit that session first, then re-run `claudes migrate`).
-2. Otherwise, move its existing `projects/`, `plugins/`, `cache/`,
-   `history.jsonl`, and `settings.json` into `<CLAUDES_BASE>/shared/`
-   (merging rather than overwriting anything already shared), then
-   replace them with symlinks. This means plain `claude` gets folded into
-   the shared layer permanently, not just copied once — from then on it
-   reads and writes the same shared context as every pool account.
-3. Separately, copy in (without deleting) any leftover historical
+   — skip it if a `claude` process is currently active under it and it
+   still has something to merge (close that session, then re-run
+   `claudes migrate`).
+2. Otherwise, merge its own `projects/`, `plugins/` and `cache/` into
+   `<CLAUDES_BASE>/shared/`, file by file and including subfolders
+   (memory files, subagent logs, tool results — everything, not just
+   session `.jsonl` files):
+   - a file shared doesn't have yet is copied in;
+   - a file shared already has with the same content is left alone;
+   - a file shared already has with *different* content is a
+     **conflict**: shared's copy is kept as it is, and the path is listed
+     in the output;
+   - a `memory/MEMORY.md` index present in both is merged: lines from the
+     profile's copy that shared's lacks are appended, except a line whose
+     link already points at a file shared's index lists.
+
+   `history.jsonl` entries are appended to shared's history (duplicates
+   skipped). `settings.json` is copied into shared only if shared's is
+   still empty (`{}`); otherwise shared's settings win.
+3. Once a folder's content is verified to be in the shared layer, the
+   profile's original is **kept**, renamed to
+   `<name>.pre-claudes-<timestamp>` next to it (for example
+   `projects.pre-claudes-20260101-093000`), and replaced with a symlink
+   into the shared layer. The same goes for `history.jsonl` and
+   `settings.json`. If anything can't be copied (an unreadable file, a
+   full disk), that item is left exactly where it was, not linked, and the
+   error is printed; the other items are still linked. From then on plain
+   `claude` reads and writes the same shared context as every pool
+   account.
+4. Separately, copy in (without deleting) any leftover historical
    session/history data sitting in stale locations from earlier setups —
    old per-account directories directly under `~/.claudes/`, and orphaned
    `~/.claude/<name>` / `~/.claude/profiles/<name>` directories.
 
-It prints how many session files and history entries were imported from
-each source, and which profiles (including `~/.claude` itself) got linked.
-It's safe to re-run; already-shared or already-imported data is skipped
-rather than duplicated.
+For each profile it prints how many files were copied, merged and
+conflicting, every conflicting path, and where the original was kept;
+then how many session files and history entries were imported from each
+stale source.
+
+Nothing is ever deleted. Once you are satisfied that everything you need
+is in the shared layer — check any conflicts it listed against the
+`*.pre-claudes-*` copy — you can delete the `*.pre-claudes-*` folders and
+files yourself. Re-running is safe: profiles that are already linked are
+left as they are, and already-imported data is skipped rather than
+duplicated.
 
 **Note:** this changes `~/.claude`'s directory structure — `projects/`,
 `plugins/`, `cache/`, `history.jsonl`, and `settings.json` become symlinks
