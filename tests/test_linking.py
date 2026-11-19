@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -464,9 +465,15 @@ class AtomicCopyTests(LinkingBase):
         self.assertFalse((self.profile / "projects").is_symlink())
 
     def test_leftover_partial_cleaned(self):
-        write(self.shared / "projects" / "-p" / ".big.jsonl.claudes-partial", "012")
+        old = write(self.shared / "projects" / "-p" / ".claudes-oldrun.claudes-partial", "012")
+        os.utime(old, (time.time() - 3600, time.time() - 3600))
+        young = write(self.shared / "projects" / "-q" / ".claudes-otherrun.claudes-partial", "012")
+        foreign = write(self.shared / "projects" / "-q" / "user-file.claudes-partial", "mine")
+        os.utime(foreign, (time.time() - 3600, time.time() - 3600))
         res = self.link()
-        self.assertEqual(partials(self.shared), [])
+        self.assertFalse(os.path.lexists(old))
+        self.assertTrue(young.is_file())
+        self.assertTrue(foreign.is_file())
         self.assertEqual(res["projects"]["conflicts"], [])
         self.assertEqual((self.shared / "projects" / "-p" / "big.jsonl").read_text(), "0123456789" * 1000)
 
@@ -714,6 +721,117 @@ class MinorTests(LinkingBase):
         with contextlib.redirect_stdout(buf):
             self.c.migrate(dry_run=True)
         self.assertIn("upper bound", buf.getvalue())
+
+
+class SecondReviewTests(LinkingBase):
+    # N1: a foreign link into or above shared is never merged.
+    def overlap_case(self, link_target):
+        write(self.shared / "projects" / "-s" / "keep.jsonl", "keep\n")
+        before = snapshot(self.shared)
+        os.symlink(link_target, self.profile / "cache")
+        res = self.link()
+        self.assertEqual(snapshot(self.shared), before)
+        [bk] = backups(self.profile, "cache")
+        self.assertEqual(os.readlink(bk), str(link_target))
+        self.assertIn(str(link_target), self.out)
+        self.assertIn("overlaps the shared layer", self.out)
+        self.assertEqual(res["cache"]["copied"], 0)
+        self.assertLinked("cache")
+
+    def test_link_to_shared(self):
+        self.overlap_case(self.shared)
+
+    def test_link_to_base(self):
+        self.overlap_case(self.c.BASE)
+
+    def test_link_to_shared_grandparent(self):
+        self.overlap_case(self.shared.parent.parent)
+
+    def test_merge_tree_refuses_overlap(self):
+        before = snapshot(self.shared)
+        res = self.c._merge_tree(self.shared, self.shared / "cache")
+        self.assertTrue(res["errors"])
+        self.assertEqual(snapshot(self.shared), before)
+        res = self.c._merge_tree(self.shared / "cache", self.shared)
+        self.assertTrue(res["errors"])
+
+    # N2
+    def test_rename_back_skipped_when_original_reappears(self):
+        write(self.profile / "projects" / "-p" / "a.jsonl", "a")
+
+        def fail(item, target):
+            write(Path(item) / "new.txt", "new")
+            raise OSError(1, "nope")
+        self.c._make_link = fail
+        self.link()
+        [bk] = backups(self.profile, "projects")
+        self.assertEqual((bk / "-p" / "a.jsonl").read_text(), "a")
+        self.assertEqual((self.profile / "projects" / "new.txt").read_text(), "new")
+        self.assertFalse((self.profile / "projects" / "-p").exists())
+        self.assertIn(str(bk), self.out)
+        self.assertIn(str(self.profile / "projects"), self.out)
+        self.assertNotIn("mv ", self.out)
+
+    # N3
+    def test_temp_name_short_and_unique(self):
+        long_name = "x" * 240 + ".jsonl"
+        write(self.profile / "projects" / "-p" / long_name, "data")
+        seen = []
+        real = self.c._copy_bytes
+
+        def spy(fsrc, fdst):
+            seen.append(os.path.basename(fdst.name))
+            real(fsrc, fdst)
+        self.c._copy_bytes = spy
+        res = self.link()
+        self.assertIsNone(res["projects"]["error"])
+        self.assertEqual((self.shared / "projects" / "-p" / long_name).read_text(), "data")
+        [name] = seen
+        self.assertTrue(name.startswith(".claudes-") and name.endswith(".claudes-partial"))
+        self.assertLess(len(name), 64)
+        self.assertNotIn("xxxx", name)
+
+    # N4
+    def test_case_variant_of_shared_refused(self):
+        inner = self.shared / "projects" / "-inner"
+        inner.mkdir(parents=True)
+        variant = self.shared.with_name("SHARED") / "projects" / "-inner"
+        case_insensitive = variant.exists()
+        before = snapshot(self.shared)
+        res = self.link(variant if case_insensitive else inner)
+        self.assertEqual(snapshot(self.shared), before)
+        self.assertIn("refused", res["projects"]["error"])
+
+    # N5a
+    def test_settings_copied_through_shared_symlink(self):
+        real = write(self.tmp / "real-settings.json", "{}")
+        os.unlink(self.shared / "settings.json")
+        os.symlink(real, self.shared / "settings.json")
+        write(self.profile / "settings.json", '{"a":1}')
+        self.link()
+        self.assertTrue((self.shared / "settings.json").is_symlink())
+        self.assertEqual(real.read_text(), '{"a":1}')
+
+    # N5b
+    def test_special_file_kept_only_in_backup(self):
+        write(self.profile / "projects" / "-p" / "a.jsonl", "a")
+        os.mkfifo(self.profile / "projects" / "-p" / "pipe")
+        res = self.link()
+        self.assertEqual(res["projects"]["special"], [os.path.join("-p", "pipe")])
+        self.assertIsNone(res["projects"]["error"])
+        self.assertIn("special file", self.out)
+        self.assertFalse(os.path.lexists(self.shared / "projects" / "-p" / "pipe"))
+        self.assertLinked("projects")
+        [bk] = backups(self.profile, "projects")
+        self.assertTrue(os.path.lexists(bk / "-p" / "pipe"))
+
+    # N5c
+    def test_memory_index_nothing_added_is_conflict(self):
+        write(self.profile / "projects" / "-p" / "memory" / "MEMORY.md", "- [Other](a.md)\n")
+        write(self.shared / "projects" / "-p" / "memory" / "MEMORY.md", "- [A](a.md)\n")
+        res = self.link()
+        self.assertEqual(res["projects"]["merged"], 0)
+        self.assertEqual(res["projects"]["conflicts"], [os.path.join("-p", "memory", "MEMORY.md")])
 
 
 if __name__ == "__main__":

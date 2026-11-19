@@ -230,8 +230,10 @@ This will:
    (memory files, subagent logs, tool results, empty folders — everything,
    not just session `.jsonl` files):
    - a file shared doesn't have yet is copied in (through a temporary
-     `.<name>.claudes-partial` file that is renamed into place only when
-     complete, so shared never holds a half-copied file);
+     `.claudes-<random>.claudes-partial` file that is renamed into place
+     only when complete, so shared never holds a half-copied file; such
+     temp files left by a killed run are removed by a later run once they
+     are ten minutes old);
    - a file shared already has with the same content is left alone;
    - a file shared already has with *different* content — or a file where
      the other side has a folder of the same name — is a **conflict**:
@@ -239,10 +241,13 @@ This will:
    - a `memory/MEMORY.md` index present in both is merged: lines from the
      profile's copy that shared's lacks are appended, except a line whose
      link already points at a file shared's index lists (an index that
-     isn't valid UTF-8 is treated as a plain conflict);
+     isn't valid UTF-8, or that has nothing to add, is reported as a
+     plain conflict);
    - a symlink inside the folder is copied as a symlink, unless it would
      point at nothing from its new place in shared; it is then listed as
-     "link kept only in the backup".
+     "link kept only in the backup";
+   - a socket, FIFO or other special file is not copied; it is listed as
+     "not copied (special file); kept only in the backup".
 
    `history.jsonl` entries are appended to shared's history, skipping
    duplicates; lines that aren't valid JSON are carried across unchanged.
@@ -260,7 +265,10 @@ This will:
    is a symlink pointing somewhere other than the shared layer, the link
    itself is kept (renamed as below, and the output says where it
    pointed), and the content it points at is merged by the same rules;
-   that content is never moved or changed.
+   that content is never moved or changed. If the link points at the
+   shared layer itself, at a folder that contains it (such as
+   `<CLAUDES_BASE>`), or at something inside it, its target is not merged
+   at all — the output says so — and only the link is kept.
 3. Once an item's content is verified to be in the shared layer, the
    profile's original is **kept**, renamed to
    `<name>.pre-claudes-<timestamp>` next to it (for example

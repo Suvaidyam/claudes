@@ -81,21 +81,27 @@ def _has_active_sessions(profile_path):
                 pass
     return False
 
+PARTIAL_PREFIX = ".claudes-"
 PARTIAL_SUFFIX = ".claudes-partial"
+PARTIAL_MAX_AGE = 600   # seconds; younger temp files may belong to a run still going
 
 def _copy_bytes(fsrc, fdst):
     shutil.copyfileobj(fsrc, fdst)
 
 def _safe_copy(src, dst):
     """Copy src to dst through a temp file in dst's folder, then os.replace it
-    into place, so dst is never left half-written. The temp file (named
-    `.<name>.claudes-partial`) is removed on any failure, Ctrl-C included."""
+    into place, so dst is never left half-written. The temp file has a unique,
+    short name (`.claudes-<random>.claudes-partial`, never the original name)
+    and is removed on any failure, Ctrl-C included. A symlinked dst is written
+    through: its target is replaced, the link stays."""
     dst = Path(dst)
-    tmp = dst.with_name(f".{dst.name}{PARTIAL_SUFFIX}")
+    if dst.is_symlink():
+        dst = dst.resolve()
+    fd, tmp = tempfile.mkstemp(prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX, dir=str(dst.parent))
+    os.close(fd)
     try:
-        with open(src, "rb") as fs, open(tmp, "wb") as fd:
-            _copy_bytes(fs, fd)
-        shutil.copystat(src, tmp)
+        with open(src, "rb") as fs, open(tmp, "wb") as fdst:
+            _copy_bytes(fs, fdst)
         os.replace(tmp, dst)
     except BaseException:
         try:
@@ -103,16 +109,39 @@ def _safe_copy(src, dst):
         except OSError:
             pass
         raise
+    try:
+        shutil.copystat(src, dst)   # after the replace, so a temp file's age is its own
+    except OSError:
+        pass
 
 def _clean_partials(root):
-    """Remove temp files a killed copy left behind under root."""
+    """Remove this tool's temp files that a killed copy left behind under root
+    (older than PARTIAL_MAX_AGE, so a run still in progress keeps its own)."""
+    cutoff = time.time() - PARTIAL_MAX_AGE
     for dirpath, dirnames, filenames in os.walk(root):
         for n in filenames:
-            if n.startswith(".") and n.endswith(PARTIAL_SUFFIX):
+            if n.startswith(PARTIAL_PREFIX) and n.endswith(PARTIAL_SUFFIX):
+                f = os.path.join(dirpath, n)
                 try:
-                    os.unlink(os.path.join(dirpath, n))
+                    if os.lstat(f).st_mtime < cutoff:
+                        os.unlink(f)
                 except OSError:
                     pass
+
+def _same_path(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return Path(a).resolve() == Path(b).resolve()
+
+def _is_inside(path, root):
+    """True when path is root or lies inside it. Walks up path's parents with
+    samefile, so a case-variant spelling on a case-insensitive disk counts."""
+    path = Path(path).resolve()
+    return any(_same_path(anc, root) for anc in [path, *path.parents])
+
+def _overlaps(a, b):
+    return _is_inside(a, b) or _is_inside(b, a)
 
 def _rename(src, dst):
     os.rename(src, dst)
@@ -251,11 +280,16 @@ def _merge_tree(src, dst, dry_run=False):
     memory/MEMORY.md index, whose missing lines are appended. Symlinks are
     copied as symlinks once everything else is in place, unless they would
     dangle from their new location (then they stay only in the backup).
-    Finally verifies every src entry is accounted for in dst."""
+    Sockets, FIFOs and other special files are not copied (they stay only in
+    the backup). Finally verifies every src entry is accounted for in dst.
+    Refuses outright when src and dst overlap (one is, or is inside, the other)."""
     src = Path(src); dst = Path(dst)
-    handled = {}   # rel -> "copied" | "same" | "merged" | "conflict" | "backup_only"
+    handled = {}   # rel -> "copied" | "same" | "merged" | "conflict" | "backup_only" | "special"
     errors = []
     links = []
+    if _overlaps(src, dst):
+        return {"copied": 0, "merged": 0, "conflicts": [], "backup_only": [], "special": [],
+                "errors": [f"refused: {src} and {dst} overlap"]}
 
     def walk_error(e):
         errors.append(f"cannot read {e.filename}: {e.strerror}")
@@ -292,7 +326,7 @@ def _merge_tree(src, dst, dry_run=False):
             rel = str(s.relative_to(src)); t = dst / rel
             try:
                 if not s.is_file():
-                    errors.append(f"{rel}: not a regular file")
+                    handled[rel] = "special"
                 elif not os.path.lexists(t):
                     if dry_run:
                         with open(s, "rb"):
@@ -306,8 +340,8 @@ def _merge_tree(src, dst, dry_run=False):
                     handled[rel] = "same"
                 elif n == "MEMORY.md" and d.name == "memory":
                     try:
-                        _merge_memory_index(s, t, dry_run)
-                        handled[rel] = "merged"
+                        added = _merge_memory_index(s, t, dry_run)
+                        handled[rel] = "merged" if added else "conflict"
                     except UnicodeDecodeError:
                         handled[rel] = "conflict"
                 else:
@@ -344,7 +378,7 @@ def _merge_tree(src, dst, dry_run=False):
                 rel = str(s.relative_to(src)); t = dst / rel
                 how = handled.get(rel)
                 try:
-                    if how == "backup_only":
+                    if how in ("backup_only", "special"):
                         ok = True
                     elif how is None or not os.path.lexists(t):
                         ok = False
@@ -364,6 +398,7 @@ def _merge_tree(src, dst, dry_run=False):
         "merged": sum(1 for v in handled.values() if v == "merged"),
         "conflicts": sorted(k for k, v in handled.items() if v == "conflict"),
         "backup_only": sorted(k for k, v in handled.items() if v == "backup_only"),
+        "special": sorted(k for k, v in handled.items() if v == "special"),
         "errors": errors,
     }
 
@@ -385,12 +420,9 @@ def _settings_conflict(mine, shared):
     return sorted(k for k in m if k not in s or m[k] != s[k])
 
 def _new_result():
-    return {"copied": 0, "merged": 0, "conflicts": [], "backup_only": [],
+    return {"copied": 0, "merged": 0, "conflicts": [], "backup_only": [], "special": [],
             "settings_keys": None, "pointed_to": None, "backup": None,
             "linked": False, "error": None, "action": "none"}
-
-def _within(path, root):
-    return path == root or root in path.parents
 
 def setup_shared_links(profile_path, dry_run=False):
     """Point a profile's portable dirs/files at SHARED, merging first.
@@ -403,8 +435,7 @@ def setup_shared_links(profile_path, dry_run=False):
     names = SHARED_DIRS + SHARED_FILES
     results = {n: _new_result() for n in names}
 
-    pr = p.resolve(); sr = SHARED.resolve()
-    if _within(pr, sr) or _within(sr, pr):
+    if _overlaps(p, SHARED):
         print(f"{RED}Refusing to link {p}{RESET}: it is, contains or is inside the shared layer {SHARED}")
         for r in results.values():
             r["error"] = "refused: profile overlaps the shared layer"
@@ -459,11 +490,16 @@ def _link_item(p, name, r, dry_run, stamp):
         r["pointed_to"] = os.readlink(item)
     if not exists:
         r["action"] = "link"
+    elif item.is_symlink() and _overlaps(item.resolve(), SHARED):
+        # Merging a target that is, holds or sits inside the shared layer would
+        # copy shared into itself. Keep the link; merge nothing.
+        r["action"] = "keep link"
+        r["overlap"] = True
     elif is_dir_item and item.is_dir():
         r["action"] = "merge"
         res = _merge_tree(item, target, dry_run)
-        r.update(copied=res["copied"], merged=res["merged"],
-                 conflicts=res["conflicts"], backup_only=res["backup_only"])
+        r.update(copied=res["copied"], merged=res["merged"], conflicts=res["conflicts"],
+                 backup_only=res["backup_only"], special=res["special"])
         if res["errors"]:
             return fail("; ".join(res["errors"]),
                         f"{item} was left where it is; fix the problem and run this again.")
@@ -509,6 +545,10 @@ def _link_item(p, name, r, dry_run, stamp):
         except OSError as e:
             msg = f"could not create the link: {e.strerror or e}"
             if backup is not None:
+                if os.path.lexists(item):
+                    # Something reappeared at the original name; don't overwrite it.
+                    return fail(msg, f"The original is kept at {backup}; something new now exists at {item}, "
+                                     "so it was not put back. Compare the two and keep what you need.")
                 try:
                     _rename(backup, item)
                     r["backup"] = None
@@ -521,6 +561,8 @@ def _link_item(p, name, r, dry_run, stamp):
     kept = f"original {'would be ' if dry_run else ''}kept at {r['backup']}"
     if r["pointed_to"] is not None:
         print(f"  {name}: was a link to {r['pointed_to']}; that link {'would be ' if dry_run else 'is '}kept at {r['backup']}")
+        if r.get("overlap"):
+            print(f"    {YELLOW}its target was not merged{RESET}: it overlaps the shared layer {SHARED}")
     if r["action"] == "merge":
         if is_dir_item:
             print(f"  {name}: {r['copied']} copied, {r['merged']} merged, {len(r['conflicts'])} conflicting; {kept}")
@@ -528,6 +570,8 @@ def _link_item(p, name, r, dry_run, stamp):
                 print(f"    {YELLOW}conflict{RESET} {c} — shared copy kept; yours is in the backup")
             for c in r["backup_only"]:
                 print(f"    {YELLOW}link kept only in the backup{RESET} {c} — it would not resolve from the shared folder")
+            for c in r["special"]:
+                print(f"    {YELLOW}not copied (special file); kept only in the backup{RESET} {c}")
         elif name == "history.jsonl":
             print(f"  {name}: {r['merged']} entries added; {kept}")
         elif r["conflicts"]:
