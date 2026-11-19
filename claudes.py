@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, re, select, shutil, signal, stat, subprocess, sys, tempfile, time
+import json, os, pty, re, select, shutil, signal, stat, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -586,7 +586,7 @@ def launch(name):
     sys.stdout.flush()
     subprocess.run(["claude"], env=env)
 
-_LOGIN_URL_RE=re.compile(r"https?://\S+")
+_LOGIN_URL_RE=re.compile(r"https?://[^\s\x00-\x1f\x7f]+")
 
 def _login(name):
     """Run `claude auth login` directly under an account's config, so the
@@ -597,7 +597,14 @@ def _login(name):
     whichever browser they choose. Browser auto-open is only suppressed on
     a best-effort basis (BROWSER=true) — claude may still open one directly;
     the clipboard copy is the reliable part. While waiting, pressing Esc
-    twice cancels the login and returns control to the caller."""
+    twice cancels the login and returns control to the caller.
+
+    The child's stdout/stderr are attached to a pty rather than a plain
+    pipe: `claude` fully buffers its output when it detects a non-tty
+    stdout, so a plain pipe can sit silent indefinitely (the user sees only
+    whatever partial output happened to flush, e.g. "Opening browser to
+    sign in…", with the sign-in URL itself stuck in the buffer). A pty
+    keeps it in normal line-buffered/tty output mode."""
     a=find(name)
     if not a:
         print("Not found"); return
@@ -607,8 +614,10 @@ def _login(name):
     env["CLAUDE_CONFIG_DIR"]=config_dir(a)
     env["BROWSER"]="true"
     sys.stdout.flush()
+    master_fd,slave_fd=pty.openpty()
     p=subprocess.Popen(["claude","auth","login"], env=env,
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                        stdout=slave_fd, stderr=slave_fd)
+    os.close(slave_fd)
 
     can_cancel=sys.stdin.isatty()
     copied=False
@@ -643,18 +652,35 @@ def _login(name):
 
     cancelled=False
     last_esc=0.0
+    buf=""
+
+    def drain_master():
+        nonlocal buf
+        try:
+            data=os.read(master_fd, 4096)
+        except OSError:
+            return False
+        if not data:
+            return False
+        buf+=data.decode(errors="replace")
+        while "\n" in buf:
+            line,buf=buf.split("\n",1)
+            handle_line(line+"\n")
+        return True
+
     try:
         while True:
             if p.poll() is not None:
-                for line in p.stdout:
-                    handle_line(line)
+                while drain_master():
+                    pass
+                if buf:
+                    handle_line(buf)
+                    buf=""
                 break
-            fds=[p.stdout]+([sys.stdin] if can_cancel else [])
+            fds=[master_fd]+([sys.stdin] if can_cancel else [])
             r,_,_=select.select(fds,[],[],0.2)
-            if p.stdout in r:
-                line=p.stdout.readline()
-                if line:
-                    handle_line(line)
+            if master_fd in r:
+                drain_master()
             if can_cancel and sys.stdin in r:
                 ch=sys.stdin.read(1)
                 if ch=="\x1b":
@@ -666,6 +692,7 @@ def _login(name):
     finally:
         if old is not None:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        os.close(master_fd)
 
     if cancelled:
         p.terminate()
