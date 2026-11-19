@@ -696,15 +696,37 @@ def install():
         print(f"ideate: skipped ({e or type(e).__name__})")
     print("Done")
 
-def add(name):
-    if not name.strip():
-        print(f"{RED}Account name cannot be empty{RESET} — pick a name."); return
+NAME_RULE="letters, digits, '-' and '_' only, starting with a letter or digit, at most 64 characters"
+
+def valid_account_name(name):
+    """Return None if `name` can be used for a new account, else a short reason."""
+    if not name or not name.strip():
+        return "cannot be empty"
     if name in RESERVED:
-        print(f"{RED}'{name}' is a reserved command name{RESET} — pick something else."); return
+        return "is a reserved command name"
+    if len(name)>64:
+        return "is longer than 64 characters"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+        return "has characters that are not allowed"
+    return None
+
+def _is_strict_descendant(path, root):
+    try:
+        r=Path(root).resolve(); p=Path(path).resolve()
+    except OSError:
+        return False
+    return p!=r and r in p.parents
+
+def add(name):
+    why=valid_account_name(name)
+    if why:
+        print(f"{RED}Invalid account name {name!r}: {why}{RESET} — use {NAME_RULE}."); return
     d=load()
     if any(a["name"]==name for a in d["accounts"]):
         print("Already exists"); return
     p=PROFILES/name
+    if p.resolve().parent!=PROFILES.resolve():
+        print(f"{RED}Invalid account name {name!r}: its profile folder would not be directly inside profiles/{RESET} — use {NAME_RULE}."); return
     for a in d["accounts"]:
         try:
             cp=config_dir(a)
@@ -741,21 +763,27 @@ def remove(name, force=False):
     if CURRENT.exists() and CURRENT.read_text().strip()==name:
         CURRENT.unlink()
     if cp:
-        try:
-            resolved=Path(cp).resolve()
-            resolved.relative_to(PROFILES.resolve())
-        except ValueError:
-            print(f"{YELLOW}{cp} is outside profiles/ — not deleting; remove it manually if desired.{RESET}")
+        link=Path(cp)
+        if link.is_symlink():
+            # never follow the link: remove only the link, and only if it sits inside profiles/
+            pr=PROFILES.resolve(); lp=link.parent.resolve()
+            if lp==pr or pr in lp.parents:
+                link.unlink()
+            else:
+                print(f"{YELLOW}{cp} is a link outside profiles/ — left on disk; remove it manually if desired.{RESET}")
         else:
-            if resolved.is_dir():
+            resolved=link.resolve()
+            unsafe={PROFILES.resolve(), BASE.resolve(), SHARED.resolve()}
+            if resolved in unsafe or any(resolved in u.parents for u in unsafe) or not _is_strict_descendant(resolved, PROFILES):
+                print(f"{YELLOW}{cp} is not a folder inside profiles/ — left on disk; remove it manually if desired.{RESET}")
+            elif resolved.is_dir():
                 shutil.rmtree(str(resolved))
     print("Removed", name)
 
 def rename(old, new):
-    if not new.strip():
-        print(f"{RED}Account name cannot be empty{RESET} — pick a name."); return
-    if new in RESERVED:
-        print(f"{RED}'{new}' is a reserved command name{RESET} — pick something else."); return
+    why=valid_account_name(new)
+    if why:
+        print(f"{RED}Invalid account name {new!r}: {why}{RESET} — use {NAME_RULE}."); return
     d=load()
     if not any(a["name"]==old for a in d["accounts"]):
         print("Not found"); return

@@ -29,9 +29,9 @@ info to help you choose.
 | Command                 | Description                                                    |
 |--------------------------|------------------------------------------------------------------|
 | `claudes install`        | Set up `~/.claudes` and put the `claudes` command on PATH        |
-| `claudes add <name>`     | Register a new account, create its profile directory, and start login |
+| `claudes add <name>`     | Register a new account, create its profile directory, and start login (names: letters, digits, `-`, `_`; start with a letter or digit; max 64 characters) |
 | `claudes remove <name>`  | Delete an account's entry and its profile directory (asks for confirmation unless `--force`) |
-| `claudes rename <old> <new>` | Rename an account in place — no profile directory or credentials are touched |
+| `claudes rename <old> <new>` | Rename an account in place — no profile directory or credentials are touched (the new name follows the same naming rule as `add`) |
 | `claudes`                | Check every account's session/usage live, then pick one to launch |
 | `claudes <name>`         | Launch that account directly — skips the usage check entirely     |
 | `claudes list`           | List configured accounts                                         |
